@@ -547,8 +547,15 @@ def create_discussion(
 
     repo_id, categories = _get_repository_and_categories(repo_full_name)
     wanted = category_name.strip().casefold()
+    # Match su nome OR slug: "Domanda"/"domanda" e "Q&A"/"q-a" funzionano
+    # tutti (audit: dubbio name-vs-slug sul write path).
     category = next(
-        (item for item in categories if (item.get("name") or "").casefold() == wanted),
+        (
+            item
+            for item in categories
+            if (item.get("name") or "").casefold() == wanted
+            or (item.get("slug") or "").casefold() == wanted
+        ),
         None,
     )
     if not category:

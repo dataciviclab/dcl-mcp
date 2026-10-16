@@ -334,6 +334,38 @@ class TestListCategories:
 
 @pytest.mark.adapter
 class TestMutations:
+    def test_create_matches_name_or_slug(self, mock_graphql):
+        """category_name accetta nome o slug (case-insensitive)."""
+        _calls, resp = mock_graphql
+        resp["data"] = {
+            "repository": {
+                "id": "R_1",
+                "discussionCategories": {
+                    "nodes": [
+                        {"id": "C_1", "name": "Q&A", "slug": "q-a", "isAnswerable": True},
+                    ]
+                },
+            }
+        }
+        # Lookup su slug riuscito → la mutation parte (il fake restituisce lo
+        # stesso payload, quindi fallisce dopo la lookup). Se lo slug non
+        # fosse accettato, l'errore sarebbe "Categoria 'q-a' non trovata".
+        with pytest.raises(GitHubDiscussionsClientError, match="createDiscussion"):
+            create_discussion("owner/repo", "q-a", "Titolo", "Body")
+
+    def test_create_rejects_unknown_category(self, mock_graphql):
+        _calls, resp = mock_graphql
+        resp["data"] = {
+            "repository": {
+                "id": "R_1",
+                "discussionCategories": {
+                    "nodes": [{"id": "C_1", "name": "Domanda", "slug": "domanda"}]
+                },
+            }
+        }
+        with pytest.raises(GitHubDiscussionsClientError, match="non trovata"):
+            create_discussion("owner/repo", "inesistente", "Titolo", "Body")
+
     def test_create_requires_non_empty_fields(self, mock_graphql):
         with pytest.raises(GitHubDiscussionsClientError, match="vuoto"):
             create_discussion("owner/repo", "", "title", "body")

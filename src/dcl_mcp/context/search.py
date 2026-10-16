@@ -437,8 +437,9 @@ def search_index(
                     "slug": a.get("slug"),
                     "name": a.get("name"),
                     "parent_repo": "",
+                    # Dominio primario dai dataset collegati; None se
+                    # l'analisi attraversa più domini.
                     "parent_domain": next(iter(a_domains)) if len(a_domains) == 1 else None,
-                    "parent_domains": sorted(a_domains),
                     "datasets": a.get("datasets") or [],
                     "score": score,
                 }
@@ -617,10 +618,16 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             card["year_min"] = period.get("start")
             card["year_max"] = period.get("end")
         # clean_rows è il campo del catalogo (righe dell'ultimo snapshot
-        # clean pubblicato) — esposto col nome onesto, non come "serie
-        # totale" (audit: n_rows 7762 vs 114k della discussione #443).
+        # clean pubblicato) — esposto col nome onesto, con disclaimer:
+        # non è garantito sia la serie completa (audit: 7762 vs 114k di
+        # #443). Per numeri citabili usare count(*) via gcs_query.
         if full.get("clean_rows"):
             card["clean_rows"] = full["clean_rows"]
+            card["clean_rows_note"] = (
+                "Righe dell'ultimo snapshot clean pubblicato dal producer. "
+                "Non è garantito sia la serie completa — per un numero "
+                "verificabile usa il query_hint (count)."
+            )
         marts = full.get("mart_refs") or []
         if marts:
             card["marts"] = marts

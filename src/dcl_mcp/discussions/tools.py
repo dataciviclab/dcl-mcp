@@ -165,8 +165,10 @@ def github_search_discussions(repo_full_name: str, query: str, limit: int = 10) 
 @mcp.tool(
     description=(
         "Crea una GitHub Discussion in una categoria del repository. "
-        "Per il Lab usa repo_full_name=dataciviclab/dataciviclab — "
-        "le categorie valide le trovi con github_list_discussion_categories."
+        "Per il Lab usa repo_full_name=dataciviclab/dataciviclab. "
+        "category_name accetta nome o slug della categoria (case-insensitive, "
+        "es. 'Domanda' o 'domanda') — elenca le opzioni con "
+        "github_list_discussion_categories."
     ),
     structured_output=True,
 )

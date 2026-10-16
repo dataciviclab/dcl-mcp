@@ -143,6 +143,7 @@ def test_explore_dataset_repo_domain(sample_index):
     assert ds["description"] == "Rifiuti urbani per comune"
     assert ds["year_min"] == 2010 and ds["year_max"] == 2024
     assert ds["clean_rows"] == 123456
+    assert "serie completa" in ds["clean_rows_note"]
     assert ds["marts"] == ["ispra_ru_base__mart_comuni"]
     assert 'layer="mart"' in ds["marts_hint"]
     assert "SELECT count(*)" in ds["marts_hint"]
@@ -200,7 +201,6 @@ def test_search_analysis_domain_filter_and_parent(sample_index):
     )
     assert any(a["slug"] == "rifiuti-urbani" for a in in_domain)
     assert in_domain[0]["parent_domain"] == "territorio-ambiente"
-    assert in_domain[0]["parent_domains"] == ["territorio-ambiente"]
 
     out_domain = search_index(
         sample_index, "rifiuti", entity_type="analysis", domain="finanza-pubblica"
