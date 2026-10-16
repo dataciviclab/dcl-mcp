@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dataciviclab/.github/actions/python-setup@main
+        with:
+          extra-packages: -e ".[dev]"
+
+      - uses: dataciviclab/.github/actions/python-ci@main
+        with:
+          lint_paths: "src/ tests/"
+          mypy_paths: "src/dcl_mcp/"
+          test_dir: "tests"
+          pytest_args: "-q -m \"not smoke\""
+          cov_module: "dcl_mcp"
+          cov_report: "term"
+          cov_threshold: "80"
