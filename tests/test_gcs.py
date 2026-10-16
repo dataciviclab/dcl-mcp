@@ -208,6 +208,55 @@ def test_validate_sql_quoted_column_not_false_positive():
     )
 
 
+# ── mart_card_detail ──────────────────────────────────────────────────────────
+
+
+def _fake_registry_with_columns():
+    col = lambda n, t, r: SimpleNamespace(name=n, type=t, role=r)  # noqa: E731
+    return SimpleNamespace(
+        marts=[
+            SimpleNamespace(
+                slug="ds__mart_wide",
+                table="mart_wide",
+                name="Wide",
+                primary_key=["year", "country"],
+                columns=[col("year", "INTEGER", "dimension"), col("export", "DOUBLE", "metric")],
+                location=SimpleNamespace(path="gs://dataciviclab-mart/x/mart_wide.parquet"),
+            )
+        ]
+    )
+
+
+def test_mart_card_detail(monkeypatch):
+    monkeypatch.setattr(resolver, "load_registry_github", lambda repo: _fake_registry_with_columns())
+    detail = resolver.mart_card_detail("some-repo", "ds__mart_wide")
+    assert detail["table"] == "mart_wide"
+    assert [c["name"] for c in detail["columns"]] == ["year", "export"]
+    assert detail["primary_key"] == ["year", "country"]
+
+
+def test_mart_card_detail_unreachable(monkeypatch):
+    def boom(repo):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(resolver, "load_registry_github", boom)
+    assert resolver.mart_card_detail("some-repo", "ds__mart_wide") is None
+    assert resolver.mart_card_detail("some-repo", "missing__mart") is None
+
+
+def test_describe_parquet_columns_local(tmp_path):
+    import duckdb
+
+    parquet = tmp_path / "m.parquet"
+    duckdb.execute(
+        f"COPY (SELECT 1 AS year, 2.5 AS \"export\") TO '{parquet}' (FORMAT PARQUET)"
+    )
+    cols = resolver.describe_parquet_columns([str(parquet)])
+    assert [c["name"] for c in cols] == ["year", "export"]
+    assert resolver.describe_parquet_columns([]) is None
+    assert resolver.describe_parquet_columns([str(tmp_path / "missing.parquet")]) is None
+
+
 # ── gcs_query tool ────────────────────────────────────────────────────────────
 
 

@@ -96,6 +96,57 @@ def _load_registry_cached(repo: str) -> Any:
     return reg
 
 
+def mart_card_detail(repo: str, mart_slug: str) -> dict[str, Any] | None:
+    """Schema di un mart dal registry del producer (best-effort, futuro).
+
+    Oggi i produttori NON committano le colonne dei mart nel registry
+    (solo slug/dataset/table/location) — questo path è future-proofing.
+    La via reale è ``describe_parquet_columns`` sul parquet pubblicato.
+    """
+    try:
+        reg = _load_registry_cached(repo)
+    except Exception:
+        return None
+    match = next((m for m in (reg.marts or []) if m.slug == mart_slug), None)
+    if match is None:
+        return None
+    columns = [
+        {"name": c.name, "type": c.type, "role": c.role}
+        for c in (match.columns or [])
+        if getattr(c, "name", None)
+    ]
+    detail: dict[str, Any] = {"table": match.table}
+    if match.name:
+        detail["name"] = match.name
+    if columns:
+        detail["columns"] = columns
+    if match.primary_key:
+        detail["primary_key"] = match.primary_key
+    return detail
+
+
+def describe_parquet_columns(read_paths: list[str]) -> list[dict[str, Any]] | None:
+    """Schema reale di un parquet via DuckDB DESCRIBE (footer-only).
+
+    Usato per le card mart: le colonne wide (la dimensione diventa nome
+    colonna) esistono solo nel parquet pubblicato, non nel topic_index
+    né nel registry. Best-effort: None su qualunque errore di rete/DuckDB.
+    """
+    if not read_paths:
+        return None
+    try:
+        from lab_connectors.duckdb import gcs_connect
+
+        path_list = ", ".join(f"'{p}'" for p in read_paths)
+        with gcs_connect(read_paths[0]) as con:
+            cur = con.execute(f"DESCRIBE SELECT * FROM read_parquet([{path_list}])")
+            rows = cur.fetchall() or []
+        columns = [{"name": r[0], "type": r[1]} for r in rows if r and r[0]]
+        return columns or None
+    except Exception:
+        return None
+
+
 def resolve_mart(topic_index: dict[str, Any], slug: str) -> dict[str, Any]:
     """Risolvi un mart: slug ``dataset__table`` (o dataset con un solo mart).
 

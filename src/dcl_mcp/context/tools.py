@@ -176,7 +176,42 @@ def find(
 def explore(ref: str) -> dict[str, object]:
     def _exec() -> dict[str, object]:
         data = ctx_fetch.load_topic_index()
-        return {"content": explore_ref(data, ref), "ok": True}
+        content = explore_ref(data, ref)
+        # Mart: lo schema reale (wide) esiste solo nel parquet — il
+        # clean parent indurrebbe a scrivere colonne sbagliate (audit 4).
+        if isinstance(content, dict) and content.get("type") == "mart":
+            from dcl_mcp.gcs.resolver import (
+                GcsResolveError,
+                describe_parquet_columns,
+                mart_card_detail,
+                resolve,
+            )
+
+            slug = content.get("slug") or ""
+            repo = content.get("registry_source") or ""
+            # 1) registry (oggi mai popolato con le colonne — future-proof)
+            detail = mart_card_detail(repo, slug) if repo else None
+            columns = (detail or {}).get("columns")
+            # 2) DESCRIBE sul parquet pubblicato (footer-only)
+            if not columns:
+                try:
+                    resolved = resolve(data, slug, layer="mart")
+                    columns = describe_parquet_columns(resolved["read_paths"])
+                except GcsResolveError:
+                    columns = None
+            if columns:
+                content["columns"] = columns
+                if detail and detail.get("primary_key"):
+                    content["primary_key"] = detail["primary_key"]
+                content.pop("note", None)
+            else:
+                # Non indurre a usare le colonne del clean: rimuovile e dichiara.
+                content.pop("columns", None)
+                content["note"] = (
+                    "Schema del mart non disponibile — "
+                    "apri con SELECT * FROM _data LIMIT 1 (gcs_query)."
+                )
+        return {"content": content, "ok": True}
 
     return guard_timed(_exec, "explore")
 

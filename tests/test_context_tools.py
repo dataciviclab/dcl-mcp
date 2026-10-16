@@ -12,6 +12,7 @@ from lab_connectors.testing import FakeHttpClient, fake_response
 import dcl_mcp.app as app
 import dcl_mcp.context.fetch as ctx_fetch
 import dcl_mcp.context.tools as context_tools
+from dcl_mcp.gcs.resolver import GcsResolveError
 from tests.conftest import SAMPLE_INDEX
 
 
@@ -180,6 +181,75 @@ def test_explore_dataset_repo_domain_not_found():
     assert dom["type"] == "domain" and "ispra_ru_base" in dom["datasets"]
 
     assert context_tools.explore(ref="does-not-exist")["content"]["found"] is False
+
+
+@pytest.mark.contract
+def test_explore_mart_uses_registry_columns_when_present(monkeypatch):
+    """Se il registry ha le colonne del mart, quelle vincono."""
+    fake = FakeHttpClient()
+    idx = json.loads(json.dumps(SAMPLE_INDEX))
+    idx["datasets"]["ispra"][0]["mart_refs"] = ["ispra_ru_base__mart_comuni"]
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(idx))
+    _use_fake(fake)
+
+    def fake_detail(repo, mart_slug):
+        assert repo == "rifiuti-urbani"
+        assert mart_slug == "ispra_ru_base__mart_comuni"
+        return {
+            "table": "mart_comuni",
+            "columns": [{"name": "anno", "type": "INTEGER", "role": "dimension"}],
+            "primary_key": ["anno"],
+        }
+
+    monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", fake_detail)
+    content = context_tools.explore(ref="ispra_ru_base__mart_comuni")["content"]
+
+    assert content["type"] == "mart"
+    assert [c["name"] for c in content["columns"]] == ["anno"]
+    assert content["primary_key"] == ["anno"]
+
+
+@pytest.mark.contract
+def test_explore_mart_describes_parquet_when_registry_empty(monkeypatch):
+    """I registry non committano colonne mart: DESCRIBE sul parquet (audit 4)."""
+    fake = FakeHttpClient()
+    idx = json.loads(json.dumps(SAMPLE_INDEX))
+    idx["datasets"]["ispra"][0]["mart_refs"] = ["ispra_ru_base__mart_comuni"]
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(idx))
+    _use_fake(fake)
+
+    monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", lambda repo, slug: None)
+    monkeypatch.setattr(
+        "dcl_mcp.gcs.resolver.resolve",
+        lambda topic, slug, layer="clean": {"read_paths": ["gs://dataciviclab-mart/x.parquet"]},
+    )
+    monkeypatch.setattr(
+        "dcl_mcp.gcs.resolver.describe_parquet_columns",
+        lambda paths: [{"name": "pil", "type": "DOUBLE"}, {"name": "export", "type": "DOUBLE"}],
+    )
+    content = context_tools.explore(ref="ispra_ru_base__mart_comuni")["content"]
+
+    assert content["type"] == "mart"
+    assert [c["name"] for c in content["columns"]] == ["pil", "export"]
+    assert "note" not in content
+
+
+@pytest.mark.contract
+def test_explore_mart_without_schema_drops_parent_columns(monkeypatch):
+    """Né registry né DESCRIBE: niente colonne del clean al posto di quelle del mart."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    _use_fake(fake)
+    monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", lambda repo, slug: None)
+    monkeypatch.setattr(
+        "dcl_mcp.gcs.resolver.resolve",
+        lambda topic, slug, layer="clean": (_ for _ in ()).throw(GcsResolveError("nope")),
+    )
+    content = context_tools.explore(ref="ispra_ru_base__mart_comuni")["content"]
+
+    assert content["type"] == "mart"
+    assert "columns" not in content
+    assert "SELECT * FROM _data LIMIT 1" in content["note"]
 
 
 # ── refresh_context ───────────────────────────────────────────────────────────
