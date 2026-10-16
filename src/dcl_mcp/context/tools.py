@@ -189,16 +189,17 @@ def explore(ref: str) -> dict[str, object]:
 
             slug = content.get("slug") or ""
             repo = content.get("registry_source") or ""
-            # 1) registry (oggi mai popolato con le colonne — future-proof)
+            # Path del mart (per gcs_path/query_hint coerenti col layer)
+            try:
+                resolved = resolve(data, slug, layer="mart")
+            except GcsResolveError:
+                resolved = None
+            # Colonne: registry se presenti (future-proof), altrimenti
+            # DESCRIBE sul parquet pubblicato (footer-only)
             detail = mart_card_detail(repo, slug) if repo else None
             columns = (detail or {}).get("columns")
-            # 2) DESCRIBE sul parquet pubblicato (footer-only)
-            if not columns:
-                try:
-                    resolved = resolve(data, slug, layer="mart")
-                    columns = describe_parquet_columns(resolved["read_paths"])
-                except GcsResolveError:
-                    columns = None
+            if not columns and resolved is not None:
+                columns = describe_parquet_columns(resolved["read_paths"])
             if columns:
                 content["columns"] = columns
                 if detail and detail.get("primary_key"):
@@ -211,6 +212,16 @@ def explore(ref: str) -> dict[str, object]:
                     "Schema del mart non disponibile — "
                     "apri con SELECT * FROM _data LIMIT 1 (gcs_query)."
                 )
+            if resolved is not None:
+                content["gs_path"] = resolved["gs_path"]
+                content["query_hint"] = (
+                    f'gcs_query(slug="{slug}", layer="mart", '
+                    'sql="SELECT count(*) AS n FROM _data")'
+                )
+            else:
+                # Il gcs_path/query_hint ereditati dal clean sono sbagliati per un mart
+                content.pop("gs_path", None)
+                content.pop("query_hint", None)
         return {"content": content, "ok": True}
 
     return guard_timed(_exec, "explore")

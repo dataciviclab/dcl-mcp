@@ -202,11 +202,20 @@ def test_explore_mart_uses_registry_columns_when_present(monkeypatch):
         }
 
     monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", fake_detail)
+    monkeypatch.setattr(
+        "dcl_mcp.gcs.resolver.resolve",
+        lambda topic, slug, layer="clean": {
+            "read_paths": ["gs://dataciviclab-mart/x.parquet"],
+            "gs_path": "gs://dataciviclab-mart/rifiuti/mart_comuni.parquet",
+        },
+    )
     content = context_tools.explore(ref="ispra_ru_base__mart_comuni")["content"]
 
     assert content["type"] == "mart"
     assert [c["name"] for c in content["columns"]] == ["anno"]
     assert content["primary_key"] == ["anno"]
+    assert content["gs_path"] == "gs://dataciviclab-mart/rifiuti/mart_comuni.parquet"
+    assert 'layer="mart"' in content["query_hint"]
 
 
 @pytest.mark.contract
@@ -221,7 +230,10 @@ def test_explore_mart_describes_parquet_when_registry_empty(monkeypatch):
     monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", lambda repo, slug: None)
     monkeypatch.setattr(
         "dcl_mcp.gcs.resolver.resolve",
-        lambda topic, slug, layer="clean": {"read_paths": ["gs://dataciviclab-mart/x.parquet"]},
+        lambda topic, slug, layer="clean": {
+            "read_paths": ["gs://dataciviclab-mart/x.parquet"],
+            "gs_path": "gs://dataciviclab-mart/eurostat/x/mart_expenditure.parquet",
+        },
     )
     monkeypatch.setattr(
         "dcl_mcp.gcs.resolver.describe_parquet_columns",
@@ -232,11 +244,14 @@ def test_explore_mart_describes_parquet_when_registry_empty(monkeypatch):
     assert content["type"] == "mart"
     assert [c["name"] for c in content["columns"]] == ["pil", "export"]
     assert "note" not in content
+    # gcs_path e query_hint devono puntare al mart, non al clean parent
+    assert content["gs_path"] == "gs://dataciviclab-mart/eurostat/x/mart_expenditure.parquet"
+    assert 'layer="mart"' in content["query_hint"]
 
 
 @pytest.mark.contract
 def test_explore_mart_without_schema_drops_parent_columns(monkeypatch):
-    """Né registry né DESCRIBE: niente colonne del clean al posto di quelle del mart."""
+    """Né registry né DESCRIBE: niente colonne/path del clean al posto di quelli del mart."""
     fake = FakeHttpClient()
     _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
     _use_fake(fake)
@@ -249,6 +264,8 @@ def test_explore_mart_without_schema_drops_parent_columns(monkeypatch):
 
     assert content["type"] == "mart"
     assert "columns" not in content
+    assert "gs_path" not in content
+    assert "query_hint" not in content
     assert "SELECT * FROM _data LIMIT 1" in content["note"]
 
 
