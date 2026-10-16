@@ -10,21 +10,35 @@ pip install "dcl-mcp @ git+https://github.com/dataciviclab/dcl-mcp.git"
 
 ## Cosa espone
 
-Un solo server, nome `dataciviclab` — 14 tool in tre famiglie:
+Un solo server, nome `dataciviclab` — 15 tool in tre famiglie:
 
 | Famiglia | Tool | Cosa fa |
 |---|---|---|
 | **Context** | `session_bootstrap` | Orientamento rapido (markdown) |
-| | `lab_map(domain=)` | Albero domains → repos → sources |
-| | `find(query, type=, domain=)` | Ricerca ranked cross-entity |
-| | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis |
+| | `lab_map(domain=)` | Albero domains → repos → sources (dominio sconosciuto → elenco domini validi) |
+| | `find(query, type=, domain=)` | Ricerca ranked cross-entity (AND cross-field su token) |
+| | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis — ref tipizzabili (`analysis:slug`, `repo:slug`, …) |
 | | `workspace_triage(section=)` | Stato Lab: radar, PR, issues, discussions… |
 | | `refresh_context()` | Trigger rebuild CI degli artefatti (serve `GITHUB_TOKEN`) |
-| **Discussions** | `github_list_discussions` | Elenca discussioni (cursor pagination) |
+| **Discussions** | `github_list_discussions` | Elenca discussioni (cursor pagination, filtro categoria) |
+| | `github_list_discussion_categories` | Categorie valide per la creazione (nome + slug) |
 | | `github_get_discussion` / `_summary` / `_comments` | Leggi una discussion e i commenti |
 | | `github_search_discussions` | Full-text search nel repo |
 | | `github_create_discussion` / `github_add_discussion_comment` | Partecipa (scrittura) |
-| **GCS** | `gcs_query(slug, sql, layer=, limit=)` | SELECT read-only sui parquet pubblici |
+| **GCS** | `gcs_query(slug, sql, layer=, limit=)` | SELECT/CTE read-only sui parquet pubblici |
+
+### Flusso tipico (onboarding)
+
+```
+find("rifiuti urbani")            # scopri dataset/analisi/repo
+  → explore("ispra_ru_base")      # card: description, anni, colonne,
+                                  # clean_rows, marts, gcs_path, query_hint
+  → gcs_query(slug=…, sql=…)      # SELECT o WITH…SELECT su `_data`,
+                                  # layer=mart per le tabelle mart
+  → find(…, include_github=true)  # issue/PR aperte + discussioni open del tema
+  → github_get_discussion / _comments
+  → github_list_discussion_categories → github_create_discussion
+```
 
 ### Routing tra MCP del Lab
 
@@ -55,12 +69,22 @@ Un solo server, nome `dataciviclab` — 14 tool in tre famiglie:
 - **Context** legge da remoto gli artefatti prodotti dalla CI di
   [agent-context-builder](https://github.com/dataciviclab/agent-context-builder)
   sul branch `context` (raw.githubusercontent, cache TTL 120s). Nessuna
-  checkout locale richiesta.
+  checkout locale richiesta. `explore` sulle card dataset espone anche
+  description, periodo (`year_min`/`year_max`), `clean_rows`, lista `marts`
+  (da `mart_refs`), colonne compatte (name/type/role), `gcs_path` e
+  `query_hint` pronto.
+- **`clean_rows`** è il conteggio dell'ultimo snapshot clean pubblicato dal
+  producer: **non è garantito** sia la serie completa. Per numeri citabili
+  usa `query_hint` (`count(*)`) via `gcs_query`.
 - **GCS** è read-only: solo bucket `dataciviclab-clean` e
-  `dataciviclab-mart`, una sola SELECT per chiamata, limite 500 righe.
+  `dataciviclab-mart`, una sola istruzione per chiamata (SELECT o
+  WITH…SELECT, niente DML/PRAGMA), limite 500 righe (clamp dichiarato).
   La query deve referenziare la tabella `_data` (view sul parquet).
-  Per i mart usa `layer=mart` e lo slug `dataset__table` (da `find`/`explore`
-  o dal registry del repo produttore).
+  Per i mart usa `layer=mart` e lo slug `dataset__table` (in `marts`/
+  `marts_hint` della card, o dal registry del repo produttore).
+- **Ref tipizzati**: in caso di collisione di slug (es. repo e analysis
+  con lo stesso nome) `explore("analysis:slug")` forza il tipo; senza
+  prefisso l'ordine è dataset → repo → domain → source → analysis.
 - I nomi dei tool sono contratti cross-repo (skill, docs, config utente):
   non vanno cambiati senza migrazione.
 
@@ -74,8 +98,9 @@ mypy src/dcl_mcp/
 ```
 
 Storia: questo server nasce dalla migrazione di `dataciviclab-context`
-(ACB) e `github-discussions` (lab-connectors) + il nuovo `gcs_query`.
-Il builder degli artefatti resta in ACB; le librerie condivise in
+(ACB) e `github-discussions` (lab-connectors) + il nuovo `gcs_query`,
+modellato su tre passate di audit con agenti newcomer. Il builder degli
+artefatti resta in ACB; le librerie condivise in
 [lab-connectors](https://github.com/dataciviclab/lab-connectors).
 
 ## Licenza
