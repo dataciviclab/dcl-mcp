@@ -134,8 +134,9 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
         "(names/descriptions/semantic types). "
         "Filters: type= (dataset|repo|domain|source|analysis), domain=, limit=. "
         "Returns type + parent pointers + score. Use explore(ref) for details. "
-        "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs and "
-        "top open Discussions of the org on the same query."
+        "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs whose "
+        "title contains all query tokens, and top open Discussions of the org "
+        "on the same query."
     ),
     structured_output=True,
 )
@@ -260,6 +261,13 @@ def _search_github_issues(
         items = result.response.json().get("items", [])
     except Exception:
         return []
+    # Rilevanza: la REST search è OR-ish e restituisce rumore (audit giro 4:
+    # "pnrr" → post LinkedIn, riordino script…). Teniamo solo le issue il cui
+    # titolo contiene tutti i token significativi della query.
+    tokens = [t for t in query.lower().split() if len(t) >= 3]
+    relevant = [
+        item for item in items if all(t in (item.get("title") or "").lower() for t in tokens)
+    ]
     return [
         {
             "repo": item.get("repository_url", "").replace("https://api.github.com/repos/", ""),
@@ -269,7 +277,7 @@ def _search_github_issues(
             "url": item.get("html_url", ""),
             "type": "pr" if "pull_request" in item else "issue",
         }
-        for item in items
+        for item in relevant
     ]
 
 

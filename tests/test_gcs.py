@@ -196,6 +196,18 @@ def test_validate_sql_rejects_forbidden_keywords():
             validate_sql(bad)
 
 
+def test_validate_sql_quoted_column_not_false_positive():
+    """Colonne legittime con nome keyword: "export" nel mart eurostat (audit giro 4)."""
+    assert validate_sql('SELECT "export" FROM _data LIMIT 5') == 'SELECT "export" FROM _data LIMIT 5'
+    assert validate_sql(
+        'SELECT anno, "export", count(*) FROM _data GROUP BY 1, 2'
+    ) == 'SELECT anno, "export", count(*) FROM _data GROUP BY 1, 2'
+    # Le stringhe letterali non devono triggerare la guardia
+    assert validate_sql("SELECT * FROM _data WHERE x = 'copy'") == (
+        "SELECT * FROM _data WHERE x = 'copy'"
+    )
+
+
 # ── gcs_query tool ────────────────────────────────────────────────────────────
 
 

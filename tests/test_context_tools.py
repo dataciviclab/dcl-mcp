@@ -310,7 +310,7 @@ def test_search_github_issues_parses_items_and_pr():
                     },
                     {
                         "number": 99,
-                        "title": "feat: add dataset",
+                        "title": "feat: add rifiuti dataset",
                         "state": "open",
                         "html_url": "https://github.com/dataciviclab/repo/pull/99",
                         "repository_url": "https://api.github.com/repos/dataciviclab/repo",
@@ -380,6 +380,47 @@ def test_find_include_github_merges_discussions(monkeypatch):
     assert content["discussions"][0]["repo"] == "dataciviclab/rifiuti-urbani"
     # Discussion search di default solo aperte
     assert "is:open" in seen["query"]
+
+
+@pytest.mark.adapter
+def test_search_github_issues_filters_by_title_tokens():
+    """Solo issue il cui titolo contiene tutti i token (audit giro 4)."""
+    fake = FakeHttpClient()
+    url = "https://api.github.com/search/issues"
+    fake.responses[url] = HttpResult(
+        response=fake_response(
+            200,
+            json_data={
+                "items": [
+                    {
+                        "number": 1,
+                        "title": "PNRR: report spesa farmaceutica 2024",
+                        "state": "open",
+                        "html_url": "https://github.com/dataciviclab/r/pull/1",
+                        "repository_url": "https://api.github.com/repos/dataciviclab/r",
+                        "pull_request": {},
+                    },
+                    {
+                        "number": 2,
+                        "title": "Riordino script italia-corpus",
+                        "state": "open",
+                        "html_url": "https://github.com/dataciviclab/r/issues/2",
+                        "repository_url": "https://api.github.com/repos/dataciviclab/r",
+                    },
+                ]
+            },
+        ),
+        err=None,
+    )
+    _use_fake(fake)
+    # "pnrr" c'è solo nel titolo #1; "script" solo nel #2 → nessuna hit con entrambi
+    assert context_tools._search_github_issues("pnrr script", "tok") == []
+    # query con un solo token → solo la issue pertinente
+    fake2 = FakeHttpClient()
+    fake2.responses[url] = fake.responses[url]
+    _use_fake(fake2)
+    result = context_tools._search_github_issues("pnrr", "tok")
+    assert [i["number"] for i in result] == [1]
 
 
 @pytest.mark.adapter

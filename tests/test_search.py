@@ -193,6 +193,21 @@ def test_explore_not_found_no_match_has_hint(sample_index):
     assert "find(query=" in card["hint"]
 
 
+def test_explore_resolves_mart_slug(sample_index):
+    """Slug mart (dataset__table) collegati al dataset padre (audit giro 4)."""
+    known = explore_ref(sample_index, "ispra_ru_base__mart_comuni")
+    assert known["found"] is True
+    assert known["type"] == "mart"
+    assert known["dataset"] == "ispra_ru_base"
+    assert 'layer="mart"' in known["marts_query_hint"]
+    assert "note" not in known
+
+    unknown = explore_ref(sample_index, "ispra_ru_base__mart_fantasma")
+    assert unknown["found"] is True
+    assert unknown["type"] == "mart"
+    assert "non è nei mart noti" in unknown["note"]
+
+
 def test_search_analysis_domain_filter_and_parent(sample_index):
     """Il filtro domain= deve valere anche per le analysis (audit giro 3)."""
     # analysis "rifiuti-urbani" collegata a ispra_ru_base → territorio-ambiente

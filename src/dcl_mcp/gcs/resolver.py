@@ -182,11 +182,26 @@ _SQL_RULES = (
 )
 
 
+def _strip_quoted(text: str) -> str:
+    """Rimuove stringhe e identificatori quotati prima del check keyword.
+
+    Le colonne legittime non devono triggerare la guardia: il mart
+    eurostat ha una colonna `export`, quotata in DuckDB come "export"
+    (audit giro 4: falso positivo che rendeva la colonna inqueryabile).
+    """
+    text = re.sub(r"'([^']|'')*'", "''", text)
+    text = re.sub(r'"[^"]*"', '""', text)
+    text = re.sub(r"`[^`]*`", "``", text)
+    return text
+
+
 def validate_sql(sql: str) -> str:
     """Valida una singola istruzione read-only su `_data` (SELECT o CTE).
 
-    Restituisce la sql normalizzata. Le CTE (`WITH … SELECT`) sono ammesse:
-    le query di analysis reali le usano spesso (friction audit giro 3).
+    Restituisce la sql normalizzata. Le CTE (`WITH … SELECT`) sono ammesse.
+    Il check keyword gira su testo con stringhe/identificatori quotati
+    rimossi: `"export"` è una colonna, `COPY` a statement-level resta
+    bloccato.
     """
     text = (sql or "").strip()
     if not text:
@@ -201,7 +216,7 @@ def validate_sql(sql: str) -> str:
             "La query deve referenziare la tabella `_data` "
             "(es. SELECT count(*) FROM _data). " + _SQL_RULES
         )
-    match = _FORBIDDEN_SQL.search(text)
+    match = _FORBIDDEN_SQL.search(_strip_quoted(text))
     if match:
         raise GcsResolveError(
             f"Parola chiave non permessa in modalità read-only: {match.group(1)}. "

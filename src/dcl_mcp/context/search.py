@@ -666,6 +666,36 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             }
         return result
 
+    # Mart (slug dataset__table, da mart_refs): collega al dataset padre.
+    # L'audit giro 4 notava che marts_hint suggeriva uno slug che explore
+    # stesso non risolvava — incoerenza chiusa qui.
+    if forced in (None, "dataset") and "__" in ref:
+        ds_part = ref.split("__", 1)[0]
+        if ds_part in by_slug:
+            base = _dataset_card(ds_part)
+            if base is not None:
+                full = _full_entry(ds_part) or {}
+                known_marts = full.get("mart_refs") or []
+                result.update(base)
+                result.update(
+                    {
+                        "type": "mart",
+                        "slug": ref,
+                        "dataset": ds_part,
+                        "found": True,
+                        "marts_query_hint": (
+                            f'gcs_query(slug="{ref}", layer="mart", '
+                            'sql="SELECT count(*) AS n FROM _data")'
+                        ),
+                    }
+                )
+                if ref not in known_marts:
+                    result["note"] = (
+                        f"'{ref}' non è nei mart noti di '{ds_part}' {known_marts} "
+                        "— gcs_query potrebbe fallire."
+                    )
+                return result
+
     # Repo
     repo_key = None
     if forced in (None, "repo"):
