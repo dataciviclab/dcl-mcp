@@ -129,12 +129,13 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
 @mcp.tool(
     description=(
         "Ranked search across datasets, repos, domains, sources, and analyses. "
-        "Matches on slug, name, tags, description, source_id and column "
-        "schema (names/descriptions/semantic types). "
+        "All query tokens must match (cross-field AND): words may be spread "
+        "across slug, name, tags, description, source_id and column schema "
+        "(names/descriptions/semantic types). "
         "Filters: type= (dataset|repo|domain|source|analysis), domain=, limit=. "
         "Returns type + parent pointers + score. Use explore(ref) for details. "
         "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs and "
-        "top Discussions of the org on the same query."
+        "top open Discussions of the org on the same query."
     ),
     structured_output=True,
 )
@@ -307,7 +308,12 @@ def _search_github_discussions(
     try:
         data = discussions_graphql(
             _DISCUSSIONS_SEARCH_QUERY,
-            {"query": f"org:dataciviclab {query.strip()}", "limit": max(1, min(limit, 10))},
+            {
+                # is:open: le discussioni chiuse sporcano il segnale per un
+                # newcomer (stessa policy di _search_github_issues).
+                "query": f"org:dataciviclab {query.strip()} is:open",
+                "limit": max(1, min(limit, 10)),
+            },
         )
     except Exception:
         return []

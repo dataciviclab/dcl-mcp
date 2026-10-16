@@ -164,6 +164,7 @@ def _get_repository_and_categories(
           nodes {
             id
             name
+            slug
             isAnswerable
           }
         }
@@ -196,6 +197,27 @@ def _get_discussion_id(repo_full_name: str, number: int) -> str:
     if not discussion:
         raise GitHubDiscussionsClientError(f"Discussion #{number} non trovata in {repo_full_name}")
     return str(discussion.get("id"))
+
+
+def list_discussion_categories(repo_full_name: str) -> dict[str, Any]:
+    """Elenca le categorie discussioni valide per la creazione.
+
+    Utile prima di github_create_discussion: evita errori da
+    category_name inventato o storico (audit giro 3).
+    """
+    repo_id, categories = _get_repository_and_categories(repo_full_name)
+    return {
+        "repo_full_name": repo_full_name,
+        "repo_id": repo_id,
+        "categories": [
+            {
+                "name": c.get("name"),
+                "slug": c.get("slug"),
+                "is_answerable": bool(c.get("isAnswerable")),
+            }
+            for c in categories
+        ],
+    }
 
 
 def search_discussions(repo_full_name: str, query: str, limit: int = 10) -> dict[str, Any]:
@@ -346,7 +368,7 @@ def list_discussions(
             item for item in discussions if (item.get("category") or "").casefold() == wanted
         ]
 
-    return {
+    payload = {
         "repo_full_name": repo_full_name,
         "category_name": category_name,
         "limit": safe_limit,
@@ -360,6 +382,15 @@ def list_discussions(
         },
         "discussions": discussions,
     }
+    if category_name and category_name.strip():
+        # Il filtro è client-side dopo la paginazione: total_count resta
+        # globale e inganna (audit giro 3). Chiarire nel payload.
+        payload["note"] = (
+            "category_name è filtrato lato client su questa pagina: "
+            "discussion_count = matching nella pagina, total_count = tutte "
+            "le discussioni del repo (non solo di questa categoria)."
+        )
+    return payload
 
 
 def get_discussion(

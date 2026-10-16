@@ -421,13 +421,24 @@ def search_index(
             )
             if score <= 0:
                 continue
+            # Il dominio di un'analisi è quello dei suoi dataset collegati
+            # (by_slug). Senza questo, il filtro domain= risultava inutile
+            # sulle analysis — falso senso di sicurezza (audit giro 3).
+            a_domains = {
+                (by_slug.get(ds) or {}).get("domain")
+                for ds in (a.get("datasets") or [])
+                if (by_slug.get(ds) or {}).get("domain")
+            }
+            if domain and domain not in a_domains:
+                continue
             results.append(
                 {
                     "type": "analysis",
                     "slug": a.get("slug"),
                     "name": a.get("name"),
                     "parent_repo": "",
-                    "parent_domain": None,
+                    "parent_domain": next(iter(a_domains)) if len(a_domains) == 1 else None,
+                    "parent_domains": sorted(a_domains),
                     "datasets": a.get("datasets") or [],
                     "score": score,
                 }
@@ -605,13 +616,17 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             card["period"] = period
             card["year_min"] = period.get("start")
             card["year_max"] = period.get("end")
+        # clean_rows è il campo del catalogo (righe dell'ultimo snapshot
+        # clean pubblicato) — esposto col nome onesto, non come "serie
+        # totale" (audit: n_rows 7762 vs 114k della discussione #443).
         if full.get("clean_rows"):
-            card["n_rows"] = full["clean_rows"]
+            card["clean_rows"] = full["clean_rows"]
         marts = full.get("mart_refs") or []
         if marts:
             card["marts"] = marts
             card["marts_hint"] = (
-                f'gcs_query(slug="{marts[0]}", layer="mart", sql="SELECT * FROM _data LIMIT 10")'
+                f'gcs_query(slug="{marts[0]}", layer="mart", '
+                'sql="SELECT count(*) AS n FROM _data")'
             )
         columns = full.get("columns") or []
         if columns:
@@ -624,7 +639,7 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         if gcs_path:
             card["gcs_path"] = gcs_path
             card["query_hint"] = (
-                f'gcs_query(slug="{slug}", sql="SELECT * FROM _data LIMIT 10")'
+                f'gcs_query(slug="{slug}", sql="SELECT count(*) AS n FROM _data")'
             )
         return card
 
@@ -770,4 +785,9 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                 }
                 for h in hints
             ]
+        else:
+            result["hint"] = (
+                "Nessun ref simile. Prova find(query=...) per cercare "
+                "liberamente, oppure un ref parziale."
+            )
     return result

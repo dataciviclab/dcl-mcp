@@ -165,9 +165,12 @@ def test_resolve_dispatch_and_bad_layer(sample_index):
 # ── validate_sql ──────────────────────────────────────────────────────────────
 
 
-def test_validate_sql_accepts_select():
+def test_validate_sql_accepts_select_and_cte():
     assert validate_sql("SELECT * FROM _data") == "SELECT * FROM _data"
     assert validate_sql("select count(*) from _data;") == "select count(*) from _data"
+    # CTE ammesse (audit giro 3: le query di analysis reali le usano)
+    cte = "WITH t AS (SELECT anno FROM _data) SELECT anno, count(*) FROM t GROUP BY 1"
+    assert validate_sql(cte) == cte
 
 
 def test_validate_sql_rejects_non_select_and_multi():

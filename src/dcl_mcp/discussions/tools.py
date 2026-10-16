@@ -18,6 +18,7 @@ from dcl_mcp.discussions.client import (
     get_discussion,
     get_discussion_comments,
     get_discussion_summary,
+    list_discussion_categories,
     list_discussions,
     search_discussions,
 )
@@ -51,6 +52,24 @@ def github_list_discussions(
         limit,
         after,
         before,
+        logger_name=SERVER_NAME,
+    )
+
+
+@mcp.tool(
+    description=(
+        "Elenca le categorie discussioni valide di un repository "
+        "(nome, slug, is_answerable) — usala prima di "
+        "github_create_discussion per non sbagliare category_name."
+    ),
+    structured_output=True,
+)
+def github_list_discussion_categories(repo_full_name: str) -> dict[str, Any]:
+    """Elenca le categorie utili per la creazione di discussioni."""
+    return guard_timed(
+        list_discussion_categories,
+        "github_list_discussion_categories",
+        repo_full_name,
         logger_name=SERVER_NAME,
     )
 
@@ -147,7 +166,7 @@ def github_search_discussions(repo_full_name: str, query: str, limit: int = 10) 
     description=(
         "Crea una GitHub Discussion in una categoria del repository. "
         "Per il Lab usa repo_full_name=dataciviclab/dataciviclab — "
-        "le categorie disponibili le trovi con github_list_discussions."
+        "le categorie valide le trovi con github_list_discussion_categories."
     ),
     structured_output=True,
 )

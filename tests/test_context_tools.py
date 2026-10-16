@@ -363,7 +363,13 @@ def test_find_include_github_merges_discussions(monkeypatch):
             }
         }
 
-    monkeypatch.setattr(context_tools, "discussions_graphql", fake_graphql)
+    seen: dict = {}
+
+    def fake_graphql_capture(query, variables):
+        seen.update(variables)
+        return fake_graphql(query, variables)
+
+    monkeypatch.setattr(context_tools, "discussions_graphql", fake_graphql_capture)
     monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
     monkeypatch.setattr(app, "_ENV_LOADED", True)
 
@@ -372,6 +378,8 @@ def test_find_include_github_merges_discussions(monkeypatch):
     assert content["discussions"][0]["number"] == 443
     assert content["discussions"][0]["type"] == "discussion"
     assert content["discussions"][0]["repo"] == "dataciviclab/rifiuti-urbani"
+    # Discussion search di default solo aperte
+    assert "is:open" in seen["query"]
 
 
 @pytest.mark.adapter

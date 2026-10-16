@@ -142,11 +142,13 @@ def test_explore_dataset_repo_domain(sample_index):
     # Enrichment explore → gcs_query
     assert ds["description"] == "Rifiuti urbani per comune"
     assert ds["year_min"] == 2010 and ds["year_max"] == 2024
-    assert ds["n_rows"] == 123456
+    assert ds["clean_rows"] == 123456
     assert ds["marts"] == ["ispra_ru_base__mart_comuni"]
     assert 'layer="mart"' in ds["marts_hint"]
+    assert "SELECT count(*)" in ds["marts_hint"]
     assert ds["gcs_path"].startswith("gs://dataciviclab-clean/")
     assert 'slug="ispra_ru_base"' in ds["query_hint"]
+    assert "SELECT count(*)" in ds["query_hint"]
 
     repo = explore_ref(sample_index, "rifiuti-urbani")
     assert repo["found"] is True and repo["type"] == "repo"
@@ -181,6 +183,29 @@ def test_explore_not_found_suggests_similar(sample_index):
     assert card["suggestions"]
     slugs = [s["slug"] for s in card["suggestions"]]
     assert "ispra_ru_base" in slugs
+
+
+def test_explore_not_found_no_match_has_hint(sample_index):
+    card = explore_ref(sample_index, "dataset_fantasma_123")
+    assert card["found"] is False
+    assert "suggestions" not in card
+    assert "find(query=" in card["hint"]
+
+
+def test_search_analysis_domain_filter_and_parent(sample_index):
+    """Il filtro domain= deve valere anche per le analysis (audit giro 3)."""
+    # analysis "rifiuti-urbani" collegata a ispra_ru_base → territorio-ambiente
+    in_domain = search_index(
+        sample_index, "rifiuti", entity_type="analysis", domain="territorio-ambiente"
+    )
+    assert any(a["slug"] == "rifiuti-urbani" for a in in_domain)
+    assert in_domain[0]["parent_domain"] == "territorio-ambiente"
+    assert in_domain[0]["parent_domains"] == ["territorio-ambiente"]
+
+    out_domain = search_index(
+        sample_index, "rifiuti", entity_type="analysis", domain="finanza-pubblica"
+    )
+    assert out_domain == []
 
 
 def test_explore_dataset_card_includes_compact_columns(sample_index):

@@ -15,6 +15,7 @@ from dcl_mcp.discussions.client import (
     create_discussion,
     get_discussion,
     get_discussion_comments,
+    list_discussion_categories,
     list_discussions,
     search_discussions,
 )
@@ -203,6 +204,8 @@ class TestListDiscussions:
         assert result["discussion_count"] == 2
         assert result["total_count"] == 3
         assert [d["number"] for d in result["discussions"]] == [1, 3]
+        # total_count resta globale: il payload lo dichiara (audit giro 3)
+        assert "total_count = tutte" in result["note"]
 
     def test_empty_response(self, mock_graphql):
         _calls, resp = mock_graphql
@@ -306,6 +309,27 @@ class TestGetDiscussionComments:
 
 
 # ── create / add comment ──────────────────────────────────────────────────────
+
+
+@pytest.mark.adapter
+class TestListCategories:
+    def test_lists_categories_with_slug(self, mock_graphql):
+        _calls, resp = mock_graphql
+        resp["data"] = {
+            "repository": {
+                "id": "R_1",
+                "discussionCategories": {
+                    "nodes": [
+                        {"id": "C_1", "name": "Domanda", "slug": "domanda", "isAnswerable": True},
+                        {"id": "C_2", "name": "Proposte", "slug": "proposte", "isAnswerable": False},
+                    ]
+                },
+            }
+        }
+        result = list_discussion_categories("owner/repo")
+        assert [c["name"] for c in result["categories"]] == ["Domanda", "Proposte"]
+        assert result["categories"][0]["slug"] == "domanda"
+        assert result["categories"][0]["is_answerable"] is True
 
 
 @pytest.mark.adapter

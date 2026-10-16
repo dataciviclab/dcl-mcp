@@ -168,7 +168,7 @@ def resolve(
 
 # ── SQL guardrail ──────────────────────────────────────────────────────────────
 
-# Parole chiave che non appartengono a un SELECT read-only. Word-boundary per
+# Parole chiave che non appartengono a una query read-only. Word-boundary per
 # non falsare positivi su colonne che contengono la sottostringa.
 _FORBIDDEN_SQL = re.compile(
     r"\b(COPY|ATTACH|DETACH|INSTALL|LOAD|PRAGMA|CREATE|INSERT|UPDATE|DELETE|DROP|"
@@ -176,26 +176,35 @@ _FORBIDDEN_SQL = re.compile(
     re.IGNORECASE,
 )
 
+_SQL_RULES = (
+    "Regole: una sola istruzione (no ';'), SELECT o WITH…SELECT su `_data`, "
+    "niente COPY/INSERT/UPDATE/DELETE/PRAGMA e simili."
+)
+
 
 def validate_sql(sql: str) -> str:
-    """Valida una singola istruzione SELECT read-only su `_data`.
+    """Valida una singola istruzione read-only su `_data` (SELECT o CTE).
 
-    Restituisce la sql normalizzata.
+    Restituisce la sql normalizzata. Le CTE (`WITH … SELECT`) sono ammesse:
+    le query di analysis reali le usano spesso (friction audit giro 3).
     """
     text = (sql or "").strip()
     if not text:
-        raise GcsResolveError("SQL vuota.")
+        raise GcsResolveError("SQL vuota. " + _SQL_RULES)
     if ";" in text.rstrip(";"):
-        raise GcsResolveError("Ammessa una sola istruzione SQL (niente ';').")
+        raise GcsResolveError("Ammessa una sola istruzione SQL (niente ';'). " + _SQL_RULES)
     text = text.rstrip(";").strip()
-    if not re.match(r"(?is)^\s*SELECT\b", text):
-        raise GcsResolveError("Ammesse solo query SELECT.")
+    if not re.match(r"(?is)^\s*(SELECT|WITH)\b", text):
+        raise GcsResolveError("Ammesse solo query SELECT (o WITH…SELECT). " + _SQL_RULES)
     if "_data" not in text:
         raise GcsResolveError(
             "La query deve referenziare la tabella `_data` "
-            "(es. SELECT * FROM _data LIMIT 10)."
+            "(es. SELECT count(*) FROM _data). " + _SQL_RULES
         )
     match = _FORBIDDEN_SQL.search(text)
     if match:
-        raise GcsResolveError(f"Parola chiave non permessa in modalità read-only: {match.group(1)}.")
+        raise GcsResolveError(
+            f"Parola chiave non permessa in modalità read-only: {match.group(1)}. "
+            + _SQL_RULES
+        )
     return text

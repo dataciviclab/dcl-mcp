@@ -21,6 +21,7 @@ EXPECTED_TOOLS = sorted(
         "refresh_context",
         # discussions (ex github-discussions server)
         "github_list_discussions",
+        "github_list_discussion_categories",
         "github_get_discussion",
         "github_get_discussion_summary",
         "github_get_discussion_comments",
