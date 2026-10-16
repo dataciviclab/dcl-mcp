@@ -68,12 +68,16 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
 
     def _exec() -> dict[str, Any]:
         try:
-            safe_limit = max(1, min(int(limit), _MAX_LIMIT)) if limit else _DEFAULT_LIMIT
-            query = validate_sql(sql)
+            requested = int(limit) if limit else _DEFAULT_LIMIT
+            safe_limit = max(1, min(requested, _MAX_LIMIT))
+            # Ordine: lookup slug PRIMA della validazione SQL — altrimenti un
+            # errore di convenzione (_data) maschera uno slug inesistente
+            # (friction audit giro 2).
             topic = load_topic_index()
             resolved = resolve(topic, slug, layer=layer)
+            query = validate_sql(sql)
             columns, rows = _run_query(resolved["read_paths"], query, safe_limit)
-            return {
+            payload: dict[str, Any] = {
                 "slug": resolved["slug"],
                 "layer": resolved["layer"],
                 "gs_path": resolved["gs_path"],
@@ -84,6 +88,9 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
                 "rows": rows,
                 "ok": True,
             }
+            if requested > _MAX_LIMIT:
+                payload["limit_clamped"] = f"{requested} → {_MAX_LIMIT} (max consentito)"
+            return payload
         except GcsResolveError as exc:
             return {"ok": False, "error": str(exc)}
 

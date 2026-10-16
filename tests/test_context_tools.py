@@ -124,6 +124,19 @@ def test_lab_map_domain_filter():
 
 
 @pytest.mark.contract
+def test_lab_map_invalid_domain_is_honest():
+    """Dominio sconosciuto → ok:false + elenco domini validi (niente totali globali)."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    _use_fake(fake)
+    result = context_tools.lab_map(domain="inesistente")
+
+    assert result["ok"] is False
+    assert " Domini validi:" in result["error"]
+    assert "territorio-ambiente" in result["valid_domains"]
+
+
+@pytest.mark.contract
 def test_find_ranks_dataset_with_parents():
     fake = FakeHttpClient()
     _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
@@ -315,6 +328,57 @@ def test_search_github_issues_parses_items_and_pr():
     assert result[0]["repo"] == "dataciviclab/test-repo"
     assert result[0]["type"] == "issue"
     assert result[1]["type"] == "pr"
+    # Default: solo aperte (is:open) — le chiuse sporcano il segnale
+    _, url, kwargs = fake.requests[0]
+    assert "is:open" in kwargs["params"]["q"]
+
+
+@pytest.mark.adapter
+def test_find_include_github_merges_discussions(monkeypatch):
+    """include_github=true aggiunge le top discussioni org-wide (GraphQL)."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    search_url = "https://api.github.com/search/issues"
+    fake.responses[search_url] = HttpResult(
+        response=fake_response(200, json_data={"items": []}), err=None
+    )
+    _use_fake(fake)
+
+    def fake_graphql(query, variables):
+        return {
+            "search": {
+                "discussionCount": 1,
+                "nodes": [
+                    {
+                        "number": 443,
+                        "title": "Rifiuti urbani",
+                        "url": "https://github.com/orgs/dataciviclab/discussions/443",
+                        "updatedAt": "2026-10-01T00:00:00Z",
+                        "answerChosenAt": None,
+                        "closed": False,
+                        "category": {"name": "Domanda"},
+                        "repository": {"nameWithOwner": "dataciviclab/rifiuti-urbani"},
+                    }
+                ],
+            }
+        }
+
+    monkeypatch.setattr(context_tools, "discussions_graphql", fake_graphql)
+    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
+    monkeypatch.setattr(app, "_ENV_LOADED", True)
+
+    content = context_tools.find(query="rifiuti", include_github=True)["content"]
+
+    assert content["discussions"][0]["number"] == 443
+    assert content["discussions"][0]["type"] == "discussion"
+    assert content["discussions"][0]["repo"] == "dataciviclab/rifiuti-urbani"
+
+
+@pytest.mark.adapter
+def test_search_github_discussions_without_token(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(app, "_ENV_LOADED", True)
+    assert context_tools._search_github_discussions("x", None) == []
 
 
 # ── artifact TTL cache ────────────────────────────────────────────────────────

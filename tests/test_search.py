@@ -140,6 +140,11 @@ def test_explore_dataset_repo_domain(sample_index):
     assert ds["analyses"] == ["rifiuti-urbani"]
     assert ds["repo"]["role"] == "dati"
     # Enrichment explore → gcs_query
+    assert ds["description"] == "Rifiuti urbani per comune"
+    assert ds["year_min"] == 2010 and ds["year_max"] == 2024
+    assert ds["n_rows"] == 123456
+    assert ds["marts"] == ["ispra_ru_base__mart_comuni"]
+    assert 'layer="mart"' in ds["marts_hint"]
     assert ds["gcs_path"].startswith("gs://dataciviclab-clean/")
     assert 'slug="ispra_ru_base"' in ds["query_hint"]
 
@@ -151,6 +156,31 @@ def test_explore_dataset_repo_domain(sample_index):
     dom = explore_ref(sample_index, "territorio-ambiente")
     assert dom["found"] is True and dom["type"] == "domain"
     assert "ispra_ru_base" in dom["datasets"]
+
+
+def test_explore_typed_refs_disambiguate_collision(sample_index):
+    """Prefisso analysis: risolve la collisione slug analysis/repo."""
+    untyped = explore_ref(sample_index, "rifiuti-urbani")
+    assert untyped["type"] == "repo"  # senza prefisso il repo vince
+
+    typed = explore_ref(sample_index, "analysis:rifiuti-urbani")
+    assert typed["found"] is True
+    assert typed["type"] == "analysis"
+    assert typed["datasets"] == ["ispra_ru_base"]
+
+    forced_repo = explore_ref(sample_index, "repo:rifiuti-urbani")
+    assert forced_repo["type"] == "repo"
+
+    missing_analysis = explore_ref(sample_index, "analysis:inexistent")
+    assert missing_analysis["found"] is False
+
+
+def test_explore_not_found_suggests_similar(sample_index):
+    card = explore_ref(sample_index, "rifiut")
+    assert card["found"] is False
+    assert card["suggestions"]
+    slugs = [s["slug"] for s in card["suggestions"]]
+    assert "ispra_ru_base" in slugs
 
 
 def test_explore_dataset_card_includes_compact_columns(sample_index):

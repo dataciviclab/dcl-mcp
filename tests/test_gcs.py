@@ -230,18 +230,21 @@ def test_gcs_query_end_to_end_local_parquet(monkeypatch, tmp_path, sample_index)
 
 
 @pytest.mark.contract
-def test_gcs_query_requires_data_table_and_valid_slug(monkeypatch, tmp_path, sample_index):
+def test_gcs_query_slug_error_before_sql_error(monkeypatch, sample_index):
+    """Lo slug inesistente non è mascherato dall'errore di convenzione _data."""
     import dcl_mcp.gcs.tools as gcs_tools
 
     monkeypatch.setattr(gcs_tools, "load_topic_index", lambda: sample_index)
 
-    missing = gcs_tools.gcs_query(slug="demo_ds", sql="SELECT 1")
+    # slug fantasma + SQL senza _data → errore sullo slug (lookup prima)
+    missing = gcs_tools.gcs_query(slug="nope", sql="SELECT 1")
     assert missing["ok"] is False
-    assert "_data" in missing["error"]
+    assert "non trovato" in missing["error"]
 
-    not_found = gcs_tools.gcs_query(slug="nope", sql="SELECT * FROM _data")
-    assert not_found["ok"] is False
-    assert "non trovato" in not_found["error"]
+    # slug valido + SQL senza _data → errore sulla convenzione
+    bad_sql = gcs_tools.gcs_query(slug="ispra_ru_base", sql="SELECT 1")
+    assert bad_sql["ok"] is False
+    assert "_data" in bad_sql["error"]
 
 
 @pytest.mark.contract
@@ -270,3 +273,4 @@ def test_gcs_query_limit_and_truncation(monkeypatch, tmp_path, sample_index):
 
     capped = gcs_tools.gcs_query(slug="demo_ds", sql="SELECT n FROM _data", limit=9999)
     assert capped["limit"] == 500
+    assert capped["limit_clamped"] == "9999 → 500 (max consentito)"

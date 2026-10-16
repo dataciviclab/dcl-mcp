@@ -530,9 +530,35 @@ def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> d
     }
 
 
+# Prefissi tipizzati per explore: "analysis:rifiuti-urbani" forza il tipo
+# quando slug di repo/analysis collidono (contratto ref, backward-compatible).
+_REF_TYPE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("dataset:", "dataset"),
+    ("repo:", "repo"),
+    ("domain:", "domain"),
+    ("source:", "source"),
+    ("analysis:", "analysis"),
+)
+
+
 def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
-    """Resolve any Lab entity (repo, dataset, domain, source, analysis)."""
-    ref_l = (ref or "").strip().lower()
+    """Resolve any Lab entity (repo, dataset, domain, source, analysis).
+
+    I ref possono essere tipizzati con prefisso (es. ``analysis:slug``);
+    senza prefisso l'ordine di risoluzione è dataset → repo → domain →
+    source → analysis (i repo vincono sulle analysis con stesso slug).
+    Se non trovato, restituisce ``suggestions`` da search_index.
+    """
+    clean_ref = (ref or "").strip()
+    ref_l = clean_ref.lower()
+    forced: str | None = None
+    for prefix, ftype in _REF_TYPE_PREFIXES:
+        if ref_l.startswith(prefix):
+            forced = ftype
+            clean_ref = clean_ref[len(prefix) :].strip()
+            ref_l = clean_ref.lower()
+            break
+    ref = clean_ref
     result: dict[str, Any] = {"ref": ref, "found": False}
 
     by_slug = topic_index.get("by_slug") or {}
@@ -569,9 +595,24 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             "category": meta.get("category"),
             "analyses": analyses_by_dataset.get(slug) or [],
         }
-        # Enrichment per il passaggio explore → gcs_query: schema compatto e
-        # path pubblico + hint d'uso (backward-compatible, campi additivi).
+        # Enrichment per il passaggio explore → gcs_query: campi che servono
+        # "prima di scrivere SQL" (backward-compatible, additivi).
         full = _full_entry(slug) or {}
+        if full.get("description"):
+            card["description"] = full["description"]
+        period = full.get("period") or {}
+        if period.get("start") or period.get("end"):
+            card["period"] = period
+            card["year_min"] = period.get("start")
+            card["year_max"] = period.get("end")
+        if full.get("clean_rows"):
+            card["n_rows"] = full["clean_rows"]
+        marts = full.get("mart_refs") or []
+        if marts:
+            card["marts"] = marts
+            card["marts_hint"] = (
+                f'gcs_query(slug="{marts[0]}", layer="mart", sql="SELECT * FROM _data LIMIT 10")'
+            )
         columns = full.get("columns") or []
         if columns:
             card["columns"] = [
@@ -588,7 +629,7 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         return card
 
     # Dataset
-    ds_card = _dataset_card(ref)
+    ds_card = _dataset_card(ref) if forced in (None, "dataset") else None
     if ds_card is not None:
         result.update(ds_card)
         result["found"] = True
@@ -604,12 +645,14 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         return result
 
     # Repo
-    repo_key = ref if ref in repos else None
-    if repo_key is None:
-        for name in repos:
-            if name.lower() == ref_l:
-                repo_key = name
-                break
+    repo_key = None
+    if forced in (None, "repo"):
+        repo_key = ref if ref in repos else None
+        if repo_key is None:
+            for name in repos:
+                if name.lower() == ref_l:
+                    repo_key = name
+                    break
     if repo_key is not None:
         card = repos[repo_key] if isinstance(repos[repo_key], dict) else {}
         ds_slugs = by_repo.get(repo_key) or []
@@ -633,11 +676,12 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
 
     # Domain
     domain_key = None
-    for d in domains:
-        slug = d.get("slug") if isinstance(d, dict) else None
-        if slug and slug.lower() == ref_l:
-            domain_key = d
-            break
+    if forced in (None, "domain"):
+        for d in domains:
+            slug = d.get("slug") if isinstance(d, dict) else None
+            if slug and slug.lower() == ref_l:
+                domain_key = d
+                break
     if domain_key is not None:
         slug = domain_key.get("slug")
         ds_slugs = domain_key.get("datasets") or by_domain.get(slug) or []
@@ -658,58 +702,72 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
     # Source (source_id)
     source_ds: list[str] = []
     seen_source_ds: set[str] = set()
-    for source_key, items in datasets_by_source.items():
-        if source_key.lower() == ref_l:
-            for item in items or []:
-                slug = item.get("slug")
-                if slug and slug not in seen_source_ds:
-                    seen_source_ds.add(slug)
-                    source_ds.append(slug)
+    if forced in (None, "source"):
+        for source_key, items in datasets_by_source.items():
+            if source_key.lower() == ref_l:
+                for item in items or []:
+                    slug = item.get("slug")
+                    if slug and slug not in seen_source_ds:
+                        seen_source_ds.add(slug)
+                        source_ds.append(slug)
+                result.update(
+                    {
+                        "type": "source",
+                        "slug": source_key,
+                        "name": source_key,
+                        "n_datasets": len(source_ds),
+                        "datasets": sorted(source_ds)[:50],
+                        "found": True,
+                    }
+                )
+                return result
+        for slug, meta in by_slug.items():
+            sid = meta.get("source_id") or ""
+            if sid and sid.lower() == ref_l and slug not in seen_source_ds:
+                seen_source_ds.add(slug)
+                source_ds.append(slug)
+        if source_ds:
             result.update(
                 {
                     "type": "source",
-                    "slug": source_key,
-                    "name": source_key,
+                    "slug": ref,
+                    "name": ref,
                     "n_datasets": len(source_ds),
                     "datasets": sorted(source_ds)[:50],
                     "found": True,
                 }
             )
             return result
-    for slug, meta in by_slug.items():
-        sid = meta.get("source_id") or ""
-        if sid and sid.lower() == ref_l and slug not in seen_source_ds:
-            seen_source_ds.add(slug)
-            source_ds.append(slug)
-    if source_ds:
-        result.update(
-            {
-                "type": "source",
-                "slug": ref,
-                "name": ref,
-                "n_datasets": len(source_ds),
-                "datasets": sorted(source_ds)[:50],
-                "found": True,
-            }
-        )
-        return result
 
     # Analysis
-    for a in analyses:
-        if (a.get("slug") or "").lower() == ref_l:
-            result.update(
-                {
-                    "type": "analysis",
-                    "slug": a.get("slug"),
-                    "name": a.get("name"),
-                    "status": a.get("status"),
-                    "description": a.get("description", ""),
-                    "source": a.get("source", ""),
-                    "period": a.get("period"),
-                    "datasets": a.get("datasets") or [],
-                    "found": True,
-                }
-            )
-            return result
+    if forced in (None, "analysis"):
+        for a in analyses:
+            if (a.get("slug") or "").lower() == ref_l:
+                result.update(
+                    {
+                        "type": "analysis",
+                        "slug": a.get("slug"),
+                        "name": a.get("name"),
+                        "status": a.get("status"),
+                        "description": a.get("description", ""),
+                        "source": a.get("source", ""),
+                        "period": a.get("period"),
+                        "datasets": a.get("datasets") or [],
+                        "found": True,
+                    }
+                )
+                return result
 
+    if not result.get("found"):
+        hints = search_index(topic_index, ref, limit=3)
+        if hints:
+            result["suggestions"] = [
+                {
+                    "type": h.get("type"),
+                    "slug": h.get("slug"),
+                    "name": h.get("name"),
+                    "score": h.get("score"),
+                }
+                for h in hints
+            ]
     return result

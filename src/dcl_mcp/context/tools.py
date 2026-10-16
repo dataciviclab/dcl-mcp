@@ -15,6 +15,7 @@ from lab_connectors.mcp import guard_timed
 from dcl_mcp.app import get_env, mcp
 from dcl_mcp.context import fetch as ctx_fetch
 from dcl_mcp.context.search import explore_ref, lab_map_summary, search_index
+from dcl_mcp.discussions.client import _graphql as discussions_graphql
 
 _REFRESH_MIN_INTERVAL = 60
 _last_refresh_attempt: float | None = None
@@ -99,13 +100,26 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
 @mcp.tool(
     description=(
         "Lab navigation map — domains → repos → sources. "
-        "Use domain= to focus on one editorial theme."
+        "Use domain= to focus on one editorial theme: an unknown domain "
+        "returns ok=false with the list of valid domain slugs."
     ),
     structured_output=True,
 )
 def lab_map(domain: str | None = None) -> dict[str, object]:
     def _exec() -> dict[str, object]:
         data = ctx_fetch.load_topic_index()
+        if domain:
+            valid = [
+                d.get("slug")
+                for d in (data.get("domains") or [])
+                if isinstance(d, dict) and d.get("slug")
+            ]
+            if domain not in valid:
+                return {
+                    "ok": False,
+                    "error": f"Dominio '{domain}' non trovato. Domini validi: {valid}",
+                    "valid_domains": valid,
+                }
         summary = lab_map_summary(data, domain=domain)
         return {"content": summary, "ok": True}
 
@@ -115,8 +129,12 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
 @mcp.tool(
     description=(
         "Ranked search across datasets, repos, domains, sources, and analyses. "
+        "Matches on slug, name, tags, description, source_id and column "
+        "schema (names/descriptions/semantic types). "
         "Filters: type= (dataset|repo|domain|source|analysis), domain=, limit=. "
-        "Returns type + parent pointers. Use explore(ref) for details."
+        "Returns type + parent pointers + score. Use explore(ref) for details. "
+        "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs and "
+        "top Discussions of the org on the same query."
     ),
     structured_output=True,
 )
@@ -139,7 +157,8 @@ def find(
         if include_github:
             token = get_env("GITHUB_TOKEN")
             payload["issues"] = _search_github_issues(query, token, limit)
-            payload["total"] += len(payload["issues"])
+            payload["discussions"] = _search_github_discussions(query, token, min(limit, 5))
+            payload["total"] += len(payload["issues"]) + len(payload["discussions"])
         return {"content": payload, "ok": True}
 
     return guard_timed(_exec, "find")
@@ -221,8 +240,10 @@ def _search_github_issues(
         if token
         else {}
     )
+    # Default: solo issue/PR aperte — le chiuse sporcano il segnale per un
+    # newcomer (friction audit giro 2: "15 item misti, issue chiuse").
     params = {
-        "q": f"{query} org:dataciviclab",
+        "q": f"{query} org:dataciviclab is:open",
         "sort": "updated",
         "order": "desc",
         "per_page": min(limit, 50),
@@ -249,3 +270,64 @@ def _search_github_issues(
         }
         for item in items
     ]
+
+
+_DISCUSSIONS_SEARCH_QUERY = """
+query($query:String!, $limit:Int!) {
+  search(query:$query, type:DISCUSSION, first:$limit) {
+    discussionCount
+    nodes {
+      ... on Discussion {
+        number
+        title
+        url
+        updatedAt
+        answerChosenAt
+        closed
+        category { name }
+        repository { nameWithOwner }
+      }
+    }
+  }
+}
+"""
+
+
+def _search_github_discussions(
+    query: str, token: str | None, limit: int = 5
+) -> list[dict[str, object]]:
+    """Top discussioni org-wide sulla query (GraphQL, richiede token).
+
+    Le discussioni non esistono nella REST search/issues — vanno cercate
+    via GraphQL type:DISCUSSION (friction: find(include_github) a zero
+    discussioni nonostante il tool github_search_discussions esista).
+    """
+    if not token:
+        return []
+    try:
+        data = discussions_graphql(
+            _DISCUSSIONS_SEARCH_QUERY,
+            {"query": f"org:dataciviclab {query.strip()}", "limit": max(1, min(limit, 10))},
+        )
+    except Exception:
+        return []
+    nodes = (data.get("search") or {}).get("nodes") or []
+    results: list[dict[str, object]] = []
+    for node in nodes:
+        if not isinstance(node, dict) or not node.get("number"):
+            continue
+        category = node.get("category") or {}
+        repo = node.get("repository") or {}
+        results.append(
+            {
+                "repo": repo.get("nameWithOwner") or "",
+                "number": node.get("number"),
+                "title": node.get("title", ""),
+                "url": node.get("url", ""),
+                "category": category.get("name"),
+                "updated_at": node.get("updatedAt"),
+                "closed": bool(node.get("closed")),
+                "type": "discussion",
+            }
+        )
+    return results

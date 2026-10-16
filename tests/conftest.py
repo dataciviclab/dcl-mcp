@@ -60,6 +60,9 @@ SAMPLE_INDEX: dict[str, Any] = {
                 "category": "ambiente",
                 "tags": ["rifiuti", "ispra"],
                 "description": "Rifiuti urbani per comune",
+                "period": {"start": 2010, "end": 2024},
+                "clean_rows": 123456,
+                "mart_refs": ["ispra_ru_base__mart_comuni"],
                 "location": {
                     "type": "gcs",
                     "path": "gs://dataciviclab-clean/rifiuti/ispra_ru_base/2024/ispra_ru_base_2024_clean.parquet",
