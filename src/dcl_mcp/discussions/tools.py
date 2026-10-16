@@ -11,7 +11,7 @@ from typing import Any
 
 from lab_connectors.mcp import guard_timed
 
-from dcl_mcp.app import mcp
+from dcl_mcp.app import SERVER_NAME, mcp
 from dcl_mcp.discussions.client import (
     add_discussion_comment,
     create_discussion,
@@ -22,12 +22,11 @@ from dcl_mcp.discussions.client import (
     search_discussions,
 )
 
-SERVER_NAME = "dataciviclab"
-
 
 @mcp.tool(
     description=(
         "Elenca le GitHub Discussions di un repository, ordinate per UPDATED_AT discendente. "
+        "Repo hub del Lab: dataciviclab/dataciviclab (intake pubblico, domande, proposte). "
         "Opzionalmente filtra per categoria (applicato lato client dopo paginazione — "
         "con paginazione attiva, discussion_count puo' essere 0 anche se discussioni "
         "della categoria esistono piu' avanti). "
@@ -145,7 +144,11 @@ def github_search_discussions(repo_full_name: str, query: str, limit: int = 10) 
 
 
 @mcp.tool(
-    description="Crea una GitHub Discussion in una categoria del repository.",
+    description=(
+        "Crea una GitHub Discussion in una categoria del repository. "
+        "Per il Lab usa repo_full_name=dataciviclab/dataciviclab — "
+        "le categorie disponibili le trovi con github_list_discussions."
+    ),
     structured_output=True,
 )
 def github_create_discussion(

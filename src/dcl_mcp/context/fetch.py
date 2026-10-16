@@ -9,8 +9,10 @@ lab_map → find → explore sullo stesso ``topic_index.json``.
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from typing import Any
 
 from lab_connectors.http import HttpClient
 from lab_connectors.mcp import TtlCache, get_mcp_logger
@@ -67,3 +69,10 @@ def fetch(path: str, retries: int = 1, backoff: float = 1.0, use_cache: bool = T
         if attempt < retries:
             time.sleep(backoff * (2**attempt))
     raise last_err or Exception(f"Failed to fetch {path}")
+
+
+def load_topic_index() -> dict[str, Any]:
+    """Fetch + parse di topic_index.json (dict plain, vuoto se non dict)."""
+    raw = fetch("topic_index.json")
+    data = json.loads(raw)
+    return data if isinstance(data, dict) else {}

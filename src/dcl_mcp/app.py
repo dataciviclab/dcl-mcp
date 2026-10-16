@@ -19,8 +19,11 @@ mcp = create_mcp_server(
     instructions=(
         "DataCivicLab — contesto, discussioni e dati pubblici del Lab. "
         "Orientamento: session_bootstrap. Navigazione: lab_map, find, explore. "
-        "Stato: workspace_triage. Partecipazione: github_* su GitHub Discussions. "
-        "Dati: gcs_query (SELECT read-only su clean/mart pubblici). "
+        "Stato: workspace_triage. "
+        "Partecipazione: github_* su GitHub Discussions — repo hub del Lab: "
+        "dataciviclab/dataciviclab (usa repo_full_name owner/repo). "
+        "Dati: gcs_query (SELECT read-only su clean/mart pubblici; slug da "
+        "find/explore, layer=mart per le tabelle mart). "
         "refresh_context richiede GITHUB_TOKEN."
     ),
 )

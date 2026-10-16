@@ -96,12 +96,6 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
     return guard_timed(_exec, "workspace_triage")
 
 
-def _load_topic_index() -> dict[str, Any]:
-    raw = ctx_fetch.fetch("topic_index.json")
-    data = json.loads(raw)
-    return data if isinstance(data, dict) else {}
-
-
 @mcp.tool(
     description=(
         "Lab navigation map — domains → repos → sources. "
@@ -111,7 +105,7 @@ def _load_topic_index() -> dict[str, Any]:
 )
 def lab_map(domain: str | None = None) -> dict[str, object]:
     def _exec() -> dict[str, object]:
-        data = _load_topic_index()
+        data = ctx_fetch.load_topic_index()
         summary = lab_map_summary(data, domain=domain)
         return {"content": summary, "ok": True}
 
@@ -134,7 +128,7 @@ def find(
     include_github: bool = False,
 ) -> dict[str, object]:
     def _exec() -> dict[str, object]:
-        data = _load_topic_index()
+        data = ctx_fetch.load_topic_index()
         results = search_index(data, query, entity_type=type, domain=domain, limit=limit)
         payload: dict[str, Any] = {
             "query": query,
@@ -160,7 +154,7 @@ def find(
 )
 def explore(ref: str) -> dict[str, object]:
     def _exec() -> dict[str, object]:
-        data = _load_topic_index()
+        data = ctx_fetch.load_topic_index()
         return {"content": explore_ref(data, ref), "ok": True}
 
     return guard_timed(_exec, "explore")

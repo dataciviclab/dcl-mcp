@@ -215,7 +215,7 @@ def test_gcs_query_end_to_end_local_parquet(monkeypatch, tmp_path, sample_index)
         "gs_path": f"gs://dataciviclab-clean/demo/{parquet.name}",
         "read_paths": [str(parquet)],
     }
-    monkeypatch.setattr(gcs_tools, "_load_topic_index", lambda: sample_index)
+    monkeypatch.setattr(gcs_tools, "load_topic_index", lambda: sample_index)
     monkeypatch.setattr(gcs_tools, "resolve", lambda *_a, **_k: fake_resolved)
 
     result = gcs_tools.gcs_query(
@@ -233,7 +233,7 @@ def test_gcs_query_end_to_end_local_parquet(monkeypatch, tmp_path, sample_index)
 def test_gcs_query_requires_data_table_and_valid_slug(monkeypatch, tmp_path, sample_index):
     import dcl_mcp.gcs.tools as gcs_tools
 
-    monkeypatch.setattr(gcs_tools, "_load_topic_index", lambda: sample_index)
+    monkeypatch.setattr(gcs_tools, "load_topic_index", lambda: sample_index)
 
     missing = gcs_tools.gcs_query(slug="demo_ds", sql="SELECT 1")
     assert missing["ok"] is False
@@ -260,7 +260,7 @@ def test_gcs_query_limit_and_truncation(monkeypatch, tmp_path, sample_index):
         "gs_path": "gs://dataciviclab-clean/demo/big.parquet",
         "read_paths": [str(parquet)],
     }
-    monkeypatch.setattr(gcs_tools, "_load_topic_index", lambda: sample_index)
+    monkeypatch.setattr(gcs_tools, "load_topic_index", lambda: sample_index)
     monkeypatch.setattr(gcs_tools, "resolve", lambda *_a, **_k: fake_resolved)
 
     result = gcs_tools.gcs_query(slug="demo_ds", sql="SELECT n FROM _data", limit=5)

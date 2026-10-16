@@ -544,13 +544,21 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
     by_repo = topic_index.get("by_repo") or {}
     by_domain = topic_index.get("by_domain") or {}
 
+    def _full_entry(slug: str) -> dict[str, Any] | None:
+        # by_slug ha la anagrafica; columns/location vivono solo nella voce
+        # completa di datasets (una scan per explore è accettabile: ~400 voci).
+        for ds in flatten_datasets(datasets_by_source):
+            if ds.get("slug") == slug:
+                return ds
+        return None
+
     def _dataset_card(slug: str) -> dict[str, Any] | None:
         # by_slug is always built from the same flat list as datasets
         # (render_topic_index) — no scan fallback needed.
         meta = by_slug.get(slug)
         if meta is None:
             return None
-        return {
+        card: dict[str, Any] = {
             "type": "dataset",
             "slug": slug,
             "name": meta.get("name") or slug,
@@ -561,6 +569,23 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             "category": meta.get("category"),
             "analyses": analyses_by_dataset.get(slug) or [],
         }
+        # Enrichment per il passaggio explore → gcs_query: schema compatto e
+        # path pubblico + hint d'uso (backward-compatible, campi additivi).
+        full = _full_entry(slug) or {}
+        columns = full.get("columns") or []
+        if columns:
+            card["columns"] = [
+                {"name": c.get("name"), "type": c.get("type"), "role": c.get("role")}
+                for c in columns
+                if isinstance(c, dict)
+            ]
+        gcs_path = (full.get("location") or {}).get("path") or ""
+        if gcs_path:
+            card["gcs_path"] = gcs_path
+            card["query_hint"] = (
+                f'gcs_query(slug="{slug}", sql="SELECT * FROM _data LIMIT 10")'
+            )
+        return card
 
     # Dataset
     ds_card = _dataset_card(ref)

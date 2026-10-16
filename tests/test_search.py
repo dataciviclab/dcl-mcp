@@ -139,6 +139,9 @@ def test_explore_dataset_repo_domain(sample_index):
     assert ds["registry_source"] == "rifiuti-urbani"
     assert ds["analyses"] == ["rifiuti-urbani"]
     assert ds["repo"]["role"] == "dati"
+    # Enrichment explore → gcs_query
+    assert ds["gcs_path"].startswith("gs://dataciviclab-clean/")
+    assert 'slug="ispra_ru_base"' in ds["query_hint"]
 
     repo = explore_ref(sample_index, "rifiuti-urbani")
     assert repo["found"] is True and repo["type"] == "repo"
@@ -148,6 +151,15 @@ def test_explore_dataset_repo_domain(sample_index):
     dom = explore_ref(sample_index, "territorio-ambiente")
     assert dom["found"] is True and dom["type"] == "domain"
     assert "ispra_ru_base" in dom["datasets"]
+
+
+def test_explore_dataset_card_includes_compact_columns(sample_index):
+    card = explore_ref(sample_index, "anac_bandi_gara")
+    assert card["found"] is True
+    assert [c["name"] for c in card["columns"]] == ["cig", "importo"]
+    # colonna compatta: name/type/role, niente description/semantic_type
+    assert set(card["columns"][0]) == {"name", "type", "role"}
+    assert "*" in card["gcs_path"]
 
 
 def test_explore_analysis_and_source(sample_index):

@@ -9,24 +9,17 @@ senza clonare il multi-repo.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from lab_connectors.duckdb import gcs_connect
 from lab_connectors.mcp import guard_timed
 
 from dcl_mcp.app import mcp
-from dcl_mcp.context.fetch import fetch
+from dcl_mcp.context.fetch import load_topic_index
 from dcl_mcp.gcs.resolver import GcsResolveError, resolve, validate_sql
 
 _MAX_LIMIT = 500
 _DEFAULT_LIMIT = 100
-
-
-def _load_topic_index() -> dict[str, Any]:
-    raw = fetch("topic_index.json")
-    data = json.loads(raw)
-    return data if isinstance(data, dict) else {}
 
 
 def _json_safe(value: Any) -> Any:
@@ -64,7 +57,9 @@ def _run_query(read_paths: list[str], sql: str, limit: int) -> tuple[list[str], 
         "(layer=mart). La query deve referenziare la tabella `_data` "
         "(es. SELECT anno, count(*) FROM _data GROUP BY anno). "
         "Una sola istruzione SELECT, limit= max righe in output (default 100, max 500). "
-        "Serve solo per i dati pubblicati: per raw/contratti/pipeline usa il MCP toolkit."
+        "Scopri gli slug con find()/explore() — explore restituisce anche "
+        "columns e gcs_path. Serve solo per i dati pubblicati: per "
+        "raw/contratti/pipeline usa il MCP toolkit."
     ),
     structured_output=True,
 )
@@ -75,7 +70,7 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
         try:
             safe_limit = max(1, min(int(limit), _MAX_LIMIT)) if limit else _DEFAULT_LIMIT
             query = validate_sql(sql)
-            topic = _load_topic_index()
+            topic = load_topic_index()
             resolved = resolve(topic, slug, layer=layer)
             columns, rows = _run_query(resolved["read_paths"], query, safe_limit)
             return {
