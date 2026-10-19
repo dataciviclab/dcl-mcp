@@ -12,11 +12,11 @@ from __future__ import annotations
 from typing import Any
 
 from lab_connectors.duckdb import gcs_connect
-from lab_connectors.mcp import guard_timed
 
 from dcl_mcp.app import mcp
 from dcl_mcp.context.fetch import load_topic_index
 from dcl_mcp.gcs.resolver import GcsResolveError, resolve, validate_sql
+from dcl_mcp.guards import guard_ok
 
 _MAX_LIMIT = 500
 _DEFAULT_LIMIT = 100
@@ -99,4 +99,4 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
         except GcsResolveError as exc:
             return {"ok": False, "error": str(exc)}
 
-    return guard_timed(_exec, "gcs_query")
+    return guard_ok(_exec, "gcs_query")

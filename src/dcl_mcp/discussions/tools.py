@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from lab_connectors.mcp import guard_timed
-
 from dcl_mcp.app import SERVER_NAME, mcp
 from dcl_mcp.discussions.client import (
     add_discussion_comment,
@@ -19,12 +17,15 @@ from dcl_mcp.discussions.client import (
     list_discussion_categories,
     list_discussions,
 )
+from dcl_mcp.guards import guard_ok
+
+HUB_REPO = "dataciviclab/dataciviclab"
 
 
 @mcp.tool(
     description=(
         "Elenca le GitHub Discussions di un repository, ordinate per UPDATED_AT discendente. "
-        "Repo hub del Lab: dataciviclab/dataciviclab (intake pubblico, domande, proposte). "
+        "Default: repo hub dataciviclab/dataciviclab. "
         "Opzionalmente filtra per categoria (applicato lato client dopo paginazione — "
         "con paginazione attiva, discussion_count puo' essere 0 anche se discussioni "
         "della categoria esistono piu' avanti). "
@@ -35,7 +36,7 @@ from dcl_mcp.discussions.client import (
     structured_output=True,
 )
 def github_list_discussions(
-    repo_full_name: str,
+    repo_full_name: str = HUB_REPO,
     category_name: str | None = None,
     limit: int = 10,
     after: str | None = None,
@@ -43,7 +44,7 @@ def github_list_discussions(
     query: str | None = None,
 ) -> dict[str, Any]:
     """Elenca le discussioni di un repo, o le cerca se query= è presente."""
-    return guard_timed(
+    return guard_ok(
         list_discussions,
         "github_list_discussions",
         repo_full_name,
@@ -64,9 +65,9 @@ def github_list_discussions(
     ),
     structured_output=True,
 )
-def github_list_discussion_categories(repo_full_name: str) -> dict[str, Any]:
+def github_list_discussion_categories(repo_full_name: str = HUB_REPO) -> dict[str, Any]:
     """Elenca le categorie utili per la creazione di discussioni."""
-    return guard_timed(
+    return guard_ok(
         list_discussion_categories,
         "github_list_discussion_categories",
         repo_full_name,
@@ -85,8 +86,8 @@ def github_list_discussion_categories(repo_full_name: str) -> dict[str, Any]:
     structured_output=True,
 )
 def github_get_discussion(
-    repo_full_name: str,
     number: int,
+    repo_full_name: str = HUB_REPO,
     mode: str = "full",
     excerpt_chars: int = 500,
     include_comments: bool = False,
@@ -95,7 +96,7 @@ def github_get_discussion(
     comments_excerpt_chars: int = 200,
 ) -> dict[str, Any]:
     """Restituisce una discussion, opzionalmente con i commenti."""
-    return guard_timed(
+    return guard_ok(
         get_discussion,
         "github_get_discussion",
         repo_full_name,
@@ -113,7 +114,7 @@ def github_get_discussion(
 @mcp.tool(
     description=(
         "Crea una GitHub Discussion in una categoria del repository. "
-        "Per il Lab usa repo_full_name=dataciviclab/dataciviclab. "
+        "Default: repo hub dataciviclab/dataciviclab. "
         "category_name accetta nome o slug della categoria (case-insensitive, "
         "es. 'Domanda' o 'domanda') — elenca le opzioni con "
         "github_list_discussion_categories."
@@ -121,10 +122,10 @@ def github_get_discussion(
     structured_output=True,
 )
 def github_create_discussion(
-    repo_full_name: str, category_name: str, title: str, body: str
+    category_name: str, title: str, body: str, repo_full_name: str = HUB_REPO
 ) -> dict[str, Any]:
     """Crea una nuova discussion in una categoria."""
-    return guard_timed(
+    return guard_ok(
         create_discussion,
         "github_create_discussion",
         repo_full_name,
@@ -139,9 +140,11 @@ def github_create_discussion(
     description="Aggiunge un commento top-level a una GitHub Discussion.",
     structured_output=True,
 )
-def github_add_discussion_comment(repo_full_name: str, number: int, body: str) -> dict[str, Any]:
+def github_add_discussion_comment(
+    number: int, body: str, repo_full_name: str = HUB_REPO
+) -> dict[str, Any]:
     """Aggiunge un commento top-level a una discussion."""
-    return guard_timed(
+    return guard_ok(
         add_discussion_comment,
         "github_add_discussion_comment",
         repo_full_name,

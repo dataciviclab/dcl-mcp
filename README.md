@@ -16,10 +16,10 @@ Un solo server, nome `dataciviclab` — 11 tool in tre famiglie:
 |---|---|---|
 | **Context** | `session_bootstrap` | Orientamento rapido (markdown) |
 | | `lab_map(domain=)` | Albero domains → repos → sources (dominio sconosciuto → elenco domini validi) |
-| | `find(query, type=, domain=)` | Ricerca ranked cross-entity (AND cross-field su token); `total_catalog` + `total_external` |
+| | `find(query, type=, domain=)` | Ricerca ranked cross-entity; `total_catalog` + `total_external` (+ `github_errors` se `include_github` fallisce) |
 | | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis — ref tipizzabili (`analysis:slug`, `repo:slug`, …) |
 | | `workspace_triage(section=)` | Stato Lab: radar, PR, issues, discussions… |
-| **Discussions** | `github_list_discussions(query=)` | Elenca (cursor pagination, filtro categoria) o cerca full-text se `query=` |
+| **Discussions** | `github_list_discussions(query=)` | Elenca (cursor pagination, filtro categoria) o cerca full-text se `query=`; `repo_full_name` default hub |
 | | `github_list_discussion_categories` | Categorie valide per la creazione (nome + slug) |
 | | `github_get_discussion(include_comments=)` | Legge una discussion; con `include_comments=true` aggiunge commenti e reply in una sola chiamata |
 | | `github_create_discussion` / `github_add_discussion_comment` | Partecipa (scrittura) |
@@ -91,8 +91,14 @@ find("rifiuti urbani")            # scopri dataset/analisi/repo
   `refresh_context` è stato rimosso: il rebuild degli artefatti è
   un'azione operativa da CLI/CI di ACB, non da un MCP per esterni.
 - **`find.total`** = `total_catalog` + `total_external` (quest'ultimo solo
-  con `include_github=true`): prima veniva gonfiato sommando issue e
-  discussioni ai risultati del catalogo.
+  con `include_github=true`). Con `include_github=true` la risposta ha
+  anche `github_ok` e, se qualcosa fallisce, `github_errors`: un token
+  assente/scaduto non viene più confuso con "nessun risultato".
+- **Envelope `ok`**: ogni risposta ha `ok` (anche gli errori, con
+  `error`/`message`). I 5 tool Discussions hanno `repo_full_name` con
+  default `dataciviclab/dataciviclab`.
+- **Cache**: schema dei parquet mart (`DESCRIBE`) cachato 10 min come il
+  registry — `explore` non ripete il round-trip GCS.
 - I nomi dei tool sono contratti cross-repo (skill, docs, config utente):
   non vanno cambiati senza migrazione.
 

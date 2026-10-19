@@ -280,14 +280,18 @@ def test_search_github_issues_error_and_malformed():
         response=None, err=RuntimeError("403 rate limit exceeded")
     )
     _use_fake(fake)
-    assert context_tools._search_github_issues("test", "tok", limit=5) == []
+    items, error = context_tools._search_github_issues("test", "tok", limit=5)
+    assert items == []
+    assert error and "403 rate limit" in error
 
     fake2 = FakeHttpClient()
     fake2.responses["https://api.github.com/search/issues"] = HttpResult(
         response=fake_response(200, text="not json"), err=None
     )
     _use_fake(fake2)
-    assert context_tools._search_github_issues("test", "tok", limit=5) == []
+    items, error = context_tools._search_github_issues("test", "tok", limit=5)
+    assert items == []
+    assert error and "non JSON" in error
 
 
 @pytest.mark.adapter
@@ -319,8 +323,9 @@ def test_search_github_issues_parses_items_and_pr():
         err=None,
     )
     _use_fake(fake)
-    result = context_tools._search_github_issues("rifiuti", "tok", limit=5)
+    result, error = context_tools._search_github_issues("rifiuti", "tok", limit=5)
 
+    assert error is None
     assert len(result) == 2
     assert result[0]["repo"] == "dataciviclab/test-repo"
     assert result[0]["type"] == "issue"
@@ -380,6 +385,35 @@ def test_find_include_github_merges_discussions(monkeypatch):
 
 
 @pytest.mark.adapter
+def test_find_include_github_reports_auth_failure(monkeypatch):
+    """Token assente/scaduto non deve sembrare 'nessun risultato'."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    fake.responses["https://api.github.com/search/issues"] = HttpResult(
+        response=fake_response(401, text="Bad credentials"), err=None
+    )
+    _use_fake(fake)
+    monkeypatch.setenv("GITHUB_TOKEN", "expired-token")
+    monkeypatch.setattr(app, "_ENV_LOADED", True)
+
+    def raising_graphql(query, variables):
+        raise RuntimeError("GitHub GraphQL HTTP 401: Bad credentials")
+
+    monkeypatch.setattr(context_tools, "discussions_graphql", raising_graphql)
+
+    content = context_tools.find(query="rifiuti", include_github=True)["content"]
+
+    assert content["github_ok"] is False
+    assert content["issues"] == []
+    assert content["discussions"] == []
+    assert content["total_external"] == 0
+    # un errore per sorgente (REST issues e GraphQL discussions)
+    assert len(content["github_errors"]) == 2
+    assert any("Bad credentials" in e for e in content["github_errors"])
+    assert any("HTTP 401" in e for e in content["github_errors"])
+
+
+@pytest.mark.adapter
 def test_search_github_issues_filters_by_title_tokens():
     """Solo issue il cui titolo contiene tutti i token (audit giro 4)."""
     fake = FakeHttpClient()
@@ -411,12 +445,12 @@ def test_search_github_issues_filters_by_title_tokens():
     )
     _use_fake(fake)
     # "pnrr" c'è solo nel titolo #1; "script" solo nel #2 → nessuna hit con entrambi
-    assert context_tools._search_github_issues("pnrr script", "tok") == []
+    assert context_tools._search_github_issues("pnrr script", "tok")[0] == []
     # query con un solo token → solo la issue pertinente
     fake2 = FakeHttpClient()
     fake2.responses[url] = fake.responses[url]
     _use_fake(fake2)
-    result = context_tools._search_github_issues("pnrr", "tok")
+    result, _error = context_tools._search_github_issues("pnrr", "tok")
     assert [i["number"] for i in result] == [1]
 
 
@@ -424,7 +458,9 @@ def test_search_github_issues_filters_by_title_tokens():
 def test_search_github_discussions_without_token(monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setattr(app, "_ENV_LOADED", True)
-    assert context_tools._search_github_discussions("x", None) == []
+    items, error = context_tools._search_github_discussions("x", None)
+    assert items == []
+    assert error == "GITHUB_TOKEN non impostato"
 
 
 # ── artifact TTL cache ────────────────────────────────────────────────────────
