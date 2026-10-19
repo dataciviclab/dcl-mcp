@@ -233,9 +233,10 @@ def list_discussion_categories(repo_full_name: str) -> dict[str, Any]:
 
 
 _SEARCH_DISCUSSIONS_QUERY = """
-query($query:String!, $limit:Int!) {
-  search(query:$query, type:DISCUSSION, first:$limit) {
+query($query:String!, $limit:Int!, $after:String) {
+  search(query:$query, type:DISCUSSION, first:$limit, after:$after) {
     discussionCount
+    pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
     nodes {
       ... on Discussion {
         number
@@ -257,21 +258,25 @@ query($query:String!, $limit:Int!) {
 
 
 def _search_nodes(
-    repo_full_name: str, query: str, limit: int
-) -> tuple[int, list[dict[str, Any]]]:
-    """Search GraphQL repo-scoped: un solo path per search e list(query=)."""
-    if not query.strip():
+    query_text: str, limit: int, after: str | None = None
+) -> tuple[int, list[dict[str, Any]], dict[str, Any]]:
+    """Search GraphQL: testo query completo, con paginazione cursor.
+
+    Restituisce ``(count, nodi, page_info)``. Il testo include già i
+    qualifier (``repo:``, ``category:``, ``sort:``).
+    """
+    if not query_text.strip():
         raise GitHubDiscussionsClientError("query di ricerca vuota")
-    owner, name = _split_repo(repo_full_name)
     safe_limit = max(1, min(limit, 50))
     data = _graphql(
         _SEARCH_DISCUSSIONS_QUERY,
-        {"query": f"repo:{owner}/{name} {query.strip()}", "limit": safe_limit},
+        {"query": query_text.strip(), "limit": safe_limit, "after": after},
     )
     payload = data.get("search") or {}
     nodes = payload.get("nodes") or []
     results = [_discussion_node_to_summary(n) for n in nodes if isinstance(n, dict)]
-    return payload.get("discussionCount") or len(results), results
+    page = payload.get("pageInfo") or {}
+    return payload.get("discussionCount") or len(results), results, page
 
 
 def list_discussions(
@@ -282,34 +287,45 @@ def list_discussions(
     before: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    """Elenca discussions, oppure cerca se ``query`` è presente.
+    """Elenca discussions, oppure cerca con ``query``/``category_name``.
 
-    Supporta cursor pagination con i parametri ``after`` e ``before``
-    (passa il ``cursor`` dalla risposta precedente).
+    Senza ``query``/``category_name``: elenco per UPDATED_AT discendente,
+    con cursor pagination ``after``/``before``.
 
-    Nota: il filtro ``category_name`` viene applicato lato client dopo la
-    paginazione GitHub. Con paginazione attiva, una pagina può restituire
-    ``discussion_count=0`` anche se discussioni della categoria esistono
-    più avanti. ``total_count`` è il conteggio globale non filtrato.
+    Con ``query`` e/o ``category_name``: full-text search server-side
+    (``mode="search"``), con paginazione cursor ``after``. Il filtro
+    categoria è un qualifier GitHub (``category:"..."``), non più un
+    filtro lato client: niente più ``discussion_count`` ingannevole.
     """
     owner, name = _split_repo(repo_full_name)
     safe_limit = max(1, min(limit, 50))
 
-    if query and query.strip():
-        count, results = _search_nodes(repo_full_name, query, safe_limit)
+    if (query and query.strip()) or (category_name and category_name.strip()):
+        parts = [f"repo:{owner}/{name}"]
         if category_name and category_name.strip():
-            wanted = category_name.strip().casefold()
-            results = [
-                r for r in results if (r.get("category") or "").casefold() == wanted
-            ]
+            # Le virgolette non sono ammesse nel qualifier.
+            cat = category_name.strip().replace('"', "")
+            parts.append(f'category:"{cat}"')
+        if query and query.strip():
+            parts.append(query.strip())
+        else:
+            # Solo categoria: mantieni l'ordine per aggiornamento recente.
+            parts.append("sort:updated-desc")
+        count, results, page = _search_nodes(" ".join(parts), safe_limit, after)
         return {
             "repo_full_name": repo_full_name,
-            "query": query.strip(),
+            "query": query.strip() if query else None,
             "mode": "search",
             "category_name": category_name,
             "limit": safe_limit,
             "total_count": count,
             "discussion_count": len(results),
+            "page_info": {
+                "has_next": page.get("hasNextPage", False),
+                "has_previous": page.get("hasPreviousPage", False),
+                "start_cursor": page.get("startCursor"),
+                "end_cursor": page.get("endCursor"),
+            },
             "discussions": results,
         }
 
@@ -368,12 +384,6 @@ def list_discussions(
     page_info = discussions_payload.get("pageInfo") or {}
     discussions = [_discussion_node_to_summary(node) for node in nodes]
 
-    if category_name and category_name.strip():
-        wanted = category_name.strip().casefold()
-        discussions = [
-            item for item in discussions if (item.get("category") or "").casefold() == wanted
-        ]
-
     payload = {
         "repo_full_name": repo_full_name,
         "mode": "list",
@@ -389,14 +399,6 @@ def list_discussions(
         },
         "discussions": discussions,
     }
-    if category_name and category_name.strip():
-        # Il filtro è client-side dopo la paginazione: total_count resta
-        # globale e inganna (audit giro 3). Chiarire nel payload.
-        payload["note"] = (
-            "category_name è filtrato lato client su questa pagina: "
-            "discussion_count = matching nella pagina, total_count = tutte "
-            "le discussioni del repo (non solo di questa categoria)."
-        )
     return payload
 
 

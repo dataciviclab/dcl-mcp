@@ -19,7 +19,7 @@ Un solo server, nome `dataciviclab` — 11 tool in tre famiglie:
 | | `find(query, type=, domain=)` | Ricerca ranked cross-entity; `total_catalog` + `total_external` (+ `github_errors` se `include_github` fallisce) |
 | | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis — ref tipizzabili (`analysis:slug`, `repo:slug`, …) |
 | | `workspace_triage(section=)` | Stato Lab: radar, PR, issues, discussions… |
-| **Discussions** | `github_list_discussions(query=)` | Elenca (cursor pagination, filtro categoria) o cerca full-text se `query=`; `repo_full_name` default hub |
+| **Discussions** | `github_list_discussions(query=, category_name=)` | Elenca (cursor) o cerca full-text/categoria server-side; `repo_full_name` default hub |
 | | `github_list_discussion_categories` | Categorie valide per la creazione (nome + slug) |
 | | `github_get_discussion(include_comments=)` | Legge una discussion; con `include_comments=true` aggiunge commenti e reply in una sola chiamata |
 | | `github_create_discussion` / `github_add_discussion_comment` | Partecipa (scrittura) |
