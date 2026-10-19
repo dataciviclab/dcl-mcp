@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
 
 import pytest
 from lab_connectors.http import HttpResult
@@ -39,7 +38,6 @@ def _reset_state():
     """Isola lo stato globale del server tra i test."""
     yield
     _clear_fake()
-    context_tools._last_refresh_attempt = None
 
 
 # ── fetch-based tools ─────────────────────────────────────────────────────────
@@ -145,6 +143,8 @@ def test_find_ranks_dataset_with_parents():
     content = context_tools.find(query="ispra_ru_base", limit=5)["content"]
 
     assert content["ok"] is True
+    assert content["total_catalog"] == len(content["results"])
+    assert content["total"] == content["total_catalog"]
     top = content["results"][0]
     assert top["type"] == "dataset"
     assert top["parent_repo"] == "rifiuti-urbani"
@@ -162,6 +162,7 @@ def test_find_type_filter_repo_and_no_github_by_default():
 
     plain = context_tools.find(query="rifiuti")["content"]
     assert "issues" not in plain
+    assert "total_external" not in plain
 
 
 @pytest.mark.contract
@@ -267,97 +268,6 @@ def test_explore_mart_without_schema_drops_parent_columns(monkeypatch):
     assert "gs_path" not in content
     assert "query_hint" not in content
     assert "SELECT * FROM _data LIMIT 1" in content["note"]
-
-
-# ── refresh_context ───────────────────────────────────────────────────────────
-
-
-def _reset_refresh_state(monkeypatch, env_loaded: bool = True) -> None:
-    monkeypatch.setattr(context_tools, "_last_refresh_attempt", None)
-    monkeypatch.setattr(app, "_ENV_LOADED", env_loaded)
-
-
-def _mock_http_result(status: int = 204) -> HttpResult:
-    resp = MagicMock()
-    resp.status_code = status
-    resp.text = "mock response"
-    return HttpResult(response=resp, err=None, ssl_fallback_used=None)
-
-
-@pytest.mark.adapter
-def test_refresh_context_no_token(monkeypatch):
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("DCL_MCP_ENV_FILE", raising=False)
-    monkeypatch.delenv("ACB_ENV_FILE", raising=False)
-    monkeypatch.setattr(app, "_ENV_LOADED", True)
-    result = context_tools.refresh_context()
-
-    assert result["ok"] is False
-    assert "GITHUB_TOKEN" in result["error"]
-
-
-@pytest.mark.adapter
-def test_refresh_context_loads_token_from_env_file(monkeypatch, tmp_path):
-    env_file = tmp_path / ".env"
-    env_file.write_text("GITHUB_TOKEN=file-token\n", encoding="utf-8")
-
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setenv("DCL_MCP_ENV_FILE", str(env_file))
-    _reset_refresh_state(monkeypatch, env_loaded=False)
-
-    with patch("dcl_mcp.context.fetch.HttpClient.post") as mock_post:
-        mock_post.return_value = _mock_http_result(204)
-        result = context_tools.refresh_context()
-
-    assert result["ok"] is True
-    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "token file-token"
-
-
-@pytest.mark.adapter
-def test_refresh_context_supports_legacy_acb_env_file(monkeypatch, tmp_path):
-    """Backward-compat: ACB_ENV_FILE continua a funzionare come DCL_MCP_ENV_FILE."""
-    env_file = tmp_path / ".env"
-    env_file.write_text("GITHUB_TOKEN=legacy-token\n", encoding="utf-8")
-
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("DCL_MCP_ENV_FILE", raising=False)
-    monkeypatch.setenv("ACB_ENV_FILE", str(env_file))
-    _reset_refresh_state(monkeypatch, env_loaded=False)
-
-    with patch("dcl_mcp.context.fetch.HttpClient.post") as mock_post:
-        mock_post.return_value = _mock_http_result(204)
-        result = context_tools.refresh_context()
-
-    assert result["ok"] is True
-    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "token legacy-token"
-
-
-@pytest.mark.adapter
-def test_refresh_context_success_and_api_error(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
-    _reset_refresh_state(monkeypatch)
-
-    with patch("dcl_mcp.context.fetch.HttpClient.post") as mock_post:
-        mock_post.return_value = _mock_http_result(204)
-        assert context_tools.refresh_context()["ok"] is True
-
-    _reset_refresh_state(monkeypatch)
-    with patch("dcl_mcp.context.fetch.HttpClient.post") as mock_post:
-        mock_post.return_value = _mock_http_result(403)
-        result = context_tools.refresh_context()
-    assert result["ok"] is False and "error" in result
-
-
-@pytest.mark.adapter
-def test_refresh_context_rate_limit(monkeypatch):
-    import time
-
-    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
-    _reset_refresh_state(monkeypatch)
-    context_tools._last_refresh_attempt = time.monotonic()
-    result = context_tools.refresh_context()
-    assert result["ok"] is False
-    assert result["retry_after"] > 0
 
 
 # ── _search_github_issues ─────────────────────────────────────────────────────
@@ -533,23 +443,3 @@ def test_artifact_cache_reuses_topic_index():
         assert ctx_fetch.artifact_cache.stats.entries >= 1
     finally:
         _clear_fake()
-
-
-@pytest.mark.policy
-def test_artifact_cache_cleared_on_refresh_success(monkeypatch):
-    fake = FakeHttpClient()
-    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
-    _use_fake(fake)
-    context_tools.lab_map()
-    assert ctx_fetch.artifact_cache.stats.entries >= 1
-
-    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
-    monkeypatch.setattr(app, "_ENV_LOADED", True)
-    monkeypatch.setattr(context_tools, "_last_refresh_attempt", None)
-
-    dispatch_url = f"{ctx_fetch.API_BASE}/actions/workflows/build-context.yml/dispatches"
-    fake.responses[dispatch_url] = HttpResult(response=fake_response(204, text=""), err=None)
-    result = context_tools.refresh_context()
-
-    assert result["ok"] is True
-    assert ctx_fetch.artifact_cache.stats.entries == 0

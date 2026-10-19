@@ -18,14 +18,10 @@ EXPECTED_TOOLS = sorted(
         "lab_map",
         "find",
         "explore",
-        "refresh_context",
         # discussions (ex github-discussions server)
         "github_list_discussions",
         "github_list_discussion_categories",
         "github_get_discussion",
-        "github_get_discussion_summary",
-        "github_get_discussion_comments",
-        "github_search_discussions",
         "github_create_discussion",
         "github_add_discussion_comment",
         # gcs

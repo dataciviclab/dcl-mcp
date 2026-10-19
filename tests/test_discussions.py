@@ -14,10 +14,8 @@ from dcl_mcp.discussions.client import (
     add_discussion_comment,
     create_discussion,
     get_discussion,
-    get_discussion_comments,
     list_discussion_categories,
     list_discussions,
-    search_discussions,
 )
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -156,6 +154,7 @@ class TestListDiscussions:
         result = list_discussions("owner/repo")
 
         assert result["repo_full_name"] == "owner/repo"
+        assert result["mode"] == "list"
         assert result["discussion_count"] == 1
         disc = result["discussions"][0]
         assert disc["number"] == 42
@@ -180,7 +179,7 @@ class TestListDiscussions:
 
         assert calls[0]["variables"]["before"] == "Y3Vyc29yOnYyOpHOA3"
         assert "last:" in calls[0]["query"]
-        assert "first:" not in calls[0]["query"]
+        assert "discussions(first:" not in calls[0]["query"]
 
     def test_category_filter_after_pagination(self, mock_graphql):
         _calls, resp = mock_graphql
@@ -222,34 +221,7 @@ class TestListDiscussions:
             list_discussions("owner/repo")
 
 
-# ── search_discussions ────────────────────────────────────────────────────────
-
-
-@pytest.mark.adapter
-class TestSearchDiscussions:
-    def test_search_returns_results(self, mock_graphql):
-        calls, resp = mock_graphql
-        resp["data"] = _FAKE_SEARCH_RESPONSE
-
-        result = search_discussions("owner/repo", "test query")
-
-        assert result["discussion_count"] == 1
-        assert result["results"][0]["author"] == "testuser"
-        assert result["results"][0]["labels"] == [{"name": "bug", "color": "d73a4a"}]
-        assert "repo:owner/repo" in calls[0]["variables"]["query"]
-
-    def test_empty_query_raises(self, mock_graphql):
-        with pytest.raises(GitHubDiscussionsClientError, match="vuota"):
-            search_discussions("owner/repo", "")
-
-    def test_limit_clamped(self, mock_graphql):
-        calls, resp = mock_graphql
-        resp["data"] = {"search": {"discussionCount": 0, "nodes": []}}
-        search_discussions("owner/repo", "test", limit=999)
-        assert calls[0]["variables"]["limit"] == 50
-
-
-# ── get_discussion / comments ─────────────────────────────────────────────────
+# ── get_discussion ─────────────────────────────────────────────────
 
 
 @pytest.mark.adapter
@@ -282,33 +254,59 @@ class TestGetDiscussion:
 
 
 @pytest.mark.adapter
-class TestGetDiscussionComments:
-    def test_returns_comments(self, mock_graphql):
-        _calls, resp = mock_graphql
+class TestGetDiscussionWithComments:
+    def test_include_comments_single_round_trip(self, mock_graphql):
+        calls, resp = mock_graphql
         resp["data"] = {
             "repository": {
                 "discussion": {
+                    "id": "D_kw123",
+                    "body": "Body",
                     "comments": {
                         "totalCount": 1,
                         "nodes": [
                             {
-                                "id": "DC_kw123",
-                                "body": "A comment",
-                                "createdAt": "2026-01-15T10:00:00Z",
-                                "author": {"login": "user1"},
+                                "id": "DC_1",
+                                "body": "Ciao",
+                                "createdAt": "2026-01-01T00:00:00Z",
+                                "author": {"login": "u1"},
                                 "replies": {"totalCount": 0, "nodes": []},
                             }
                         ],
-                    }
+                    },
                 }
             }
         }
-        result = get_discussion_comments("owner/repo", 42)
+        result = get_discussion("owner/repo", 42, include_comments=True)
+        assert len(calls) == 1
+        assert result["body"] == "Body"
         assert result["comment_count"] == 1
-        assert result["comments"][0]["author"] == "user1"
+        assert result["comments"][0]["author"] == "u1"
+        assert "$commentsLimit" in calls[0]["query"]
+
+    def test_without_comments_has_no_comments_key(self, mock_graphql):
+        _calls, resp = mock_graphql
+        resp["data"] = {"repository": {"discussion": {"id": "D", "body": "B"}}}
+        assert "comments" not in get_discussion("owner/repo", 42)
+
+    def test_summary_clamp_unified(self, mock_graphql):
+        _calls, resp = mock_graphql
+        resp["data"] = {"repository": {"discussion": {"id": "D", "body": "A" * 5000}}}
+        result = get_discussion("owner/repo", 42, mode="summary", excerpt_chars=99999)
+        assert result["excerpt_chars"] == 2000
 
 
-# ── create / add comment ──────────────────────────────────────────────────────
+@pytest.mark.adapter
+class TestListDiscussionsSearch:
+    def test_query_uses_search_path_same_shape(self, mock_graphql):
+        calls, resp = mock_graphql
+        resp["data"] = _FAKE_SEARCH_RESPONSE
+        result = list_discussions("owner/repo", query="test query")
+
+        assert result["mode"] == "search"
+        assert result["discussion_count"] == 1
+        assert result["discussions"][0]["number"] == 42
+        assert "repo:owner/repo" in calls[0]["variables"]["query"]
 
 
 @pytest.mark.adapter

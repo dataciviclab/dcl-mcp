@@ -20,7 +20,6 @@ from lab_connectors.mcp import TtlCache, get_mcp_logger
 REPO = os.environ.get("ACB_REPO", "dataciviclab/agent-context-builder")
 BRANCH = os.environ.get("ACB_BRANCH", "context")
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
-API_BASE = f"https://api.github.com/repos/{REPO}"
 
 ARTIFACT_TTL_SECONDS = int(os.environ.get("ACB_ARTIFACT_TTL_SECONDS", "120"))
 artifact_cache: TtlCache[str, str] = TtlCache(ttl_seconds=ARTIFACT_TTL_SECONDS)
