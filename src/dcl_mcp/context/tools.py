@@ -306,8 +306,8 @@ def _search_github_discussions(
     """Top discussioni org-wide sulla query (GraphQL, richiede token).
 
     Le discussioni non esistono nella REST search/issues — vanno cercate
-    via GraphQL type:DISCUSSION (friction: find(include_github) a zero
-    discussioni nonostante il tool github_search_discussions esista).
+    via GraphQL type:DISCUSSION, altrimenti ``find(include_github=True)``
+    restituisce zero discussioni.
     """
     if not token:
         return []
