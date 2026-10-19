@@ -23,6 +23,7 @@ pytestmark = pytest.mark.pure_unit
 def _clear_registry_cache():
     yield
     resolver._registry_cache.clear()
+    resolver._schema_cache.clear()
 
 
 # ── to_read_paths / bucket allowlist ──────────────────────────────────────────
@@ -255,6 +256,22 @@ def test_describe_parquet_columns_local(tmp_path):
     assert [c["name"] for c in cols] == ["year", "export"]
     assert resolver.describe_parquet_columns([]) is None
     assert resolver.describe_parquet_columns([str(tmp_path / "missing.parquet")]) is None
+
+
+def test_describe_parquet_columns_is_cached(tmp_path):
+    """Il DESCRIBE è un round-trip GCS: seconda chiamata dalla cache."""
+    import duckdb
+
+    parquet = tmp_path / "cached.parquet"
+    duckdb.execute(f"COPY (SELECT 1 AS anno) TO '{parquet}' (FORMAT PARQUET)")
+
+    first = resolver.describe_parquet_columns([str(parquet)])
+    assert first == [{"name": "anno", "type": "INTEGER"}]
+    assert resolver._schema_cache.stats.entries == 1
+
+    # Rimuovere il file non conta: la cache risponde senza toccare DuckDB.
+    parquet.unlink()
+    assert resolver.describe_parquet_columns([str(parquet)]) == first
 
 
 # ── gcs_query tool ────────────────────────────────────────────────────────────

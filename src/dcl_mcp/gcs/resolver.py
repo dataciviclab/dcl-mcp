@@ -31,6 +31,9 @@ _log = get_mcp_logger("dcl-mcp-gcs", level="INFO")
 # Registry remoto: cambiano raramente (push nei repo produttori) — 10 minuti
 # bastano tra un refresh e l'altro della sessione.
 _registry_cache: TtlCache[str, Any] = TtlCache(ttl_seconds=600)
+# Schema (colonne) dei parquet mart: il DESCRIBE è un round-trip GCS, lo
+# schema cambia solo a publish — stessa TTL del registry.
+_schema_cache: TtlCache[str, Any] = TtlCache(ttl_seconds=600)
 
 
 class GcsResolveError(ValueError):
@@ -134,6 +137,10 @@ def describe_parquet_columns(read_paths: list[str]) -> list[dict[str, Any]] | No
     """
     if not read_paths:
         return None
+    cache_key = "|".join(read_paths)
+    cached = _schema_cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         from lab_connectors.duckdb import gcs_connect
 
@@ -142,7 +149,10 @@ def describe_parquet_columns(read_paths: list[str]) -> list[dict[str, Any]] | No
             cur = con.execute(f"DESCRIBE SELECT * FROM read_parquet([{path_list}])")
             rows = cur.fetchall() or []
         columns = [{"name": r[0], "type": r[1]} for r in rows if r and r[0]]
-        return columns or None
+        if columns:
+            _schema_cache.set(cache_key, columns)
+            return columns
+        return None
     except Exception:
         return None
 

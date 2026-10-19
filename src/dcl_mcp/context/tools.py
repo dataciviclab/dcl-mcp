@@ -11,12 +11,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from lab_connectors.mcp import guard_timed
-
 from dcl_mcp.app import get_env, mcp
 from dcl_mcp.context import fetch as ctx_fetch
 from dcl_mcp.context.search import explore_ref, lab_map_summary, search_index
 from dcl_mcp.discussions.client import _graphql as discussions_graphql
+from dcl_mcp.guards import guard_ok
 
 
 @mcp.tool(
@@ -28,7 +27,7 @@ def session_bootstrap() -> dict[str, object]:
         content = ctx_fetch.fetch("session_bootstrap.md")
         return {"content": content, "format": "markdown", "ok": True}
 
-    return guard_timed(_exec, "session_bootstrap")
+    return guard_ok(_exec, "session_bootstrap")
 
 
 @mcp.tool(
@@ -92,7 +91,7 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
 
         return {"content": extractor(data), "ok": True}
 
-    return guard_timed(_exec, "workspace_triage")
+    return guard_ok(_exec, "workspace_triage")
 
 
 @mcp.tool(
@@ -121,7 +120,7 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
         summary = lab_map_summary(data, domain=domain)
         return {"content": summary, "ok": True}
 
-    return guard_timed(_exec, "lab_map")
+    return guard_ok(_exec, "lab_map")
 
 
 @mcp.tool(
@@ -156,15 +155,24 @@ def find(
         }
         if include_github:
             token = get_env("GITHUB_TOKEN")
-            payload["issues"] = _search_github_issues(query, token, limit)
-            payload["discussions"] = _search_github_discussions(query, token, min(limit, 5))
-            payload["total_external"] = len(payload["issues"]) + len(payload["discussions"])
+            issues, issues_err = _search_github_issues(query, token, limit)
+            discussions, discussions_err = _search_github_discussions(
+                query, token, min(limit, 5)
+            )
+            payload["issues"] = issues
+            payload["discussions"] = discussions
+            payload["total_external"] = len(issues) + len(discussions)
+            # Un token assente/scaduto non deve sembrare "nessun risultato".
+            errors = list(dict.fromkeys(e for e in (issues_err, discussions_err) if e))
+            payload["github_ok"] = not errors
+            if errors:
+                payload["github_errors"] = errors
         # total resta la somma esplicita: prima veniva gonfiato in-place e
         # non significava più "match nel catalogo".
         payload["total"] = payload["total_catalog"] + payload.get("total_external", 0)
         return {"content": payload, "ok": True}
 
-    return guard_timed(_exec, "find")
+    return guard_ok(_exec, "find")
 
 
 @mcp.tool(
@@ -225,7 +233,7 @@ def explore(ref: str) -> dict[str, object]:
                 content.pop("query_hint", None)
         return {"content": content, "ok": True}
 
-    return guard_timed(_exec, "explore")
+    return guard_ok(_exec, "explore")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -233,7 +241,14 @@ def explore(ref: str) -> dict[str, object]:
 
 def _search_github_issues(
     query: str, token: str | None, limit: int = 10
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], str | None]:
+    """Issue/PR aperte dell'org, filtrate sui token del titolo.
+
+    Restituisce ``(items, errore)``: l'errore è esplicito perché un
+    fallimento GitHub non deve sembrare "nessun risultato".
+    """
+    if not token:
+        return [], "GITHUB_TOKEN non impostato"
     url = "https://api.github.com/search/issues"
     headers = (
         {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
@@ -251,14 +266,16 @@ def _search_github_issues(
     client = ctx_fetch.get_http()
     try:
         result = client.get(url, params=params, headers=headers)
-    except Exception:
-        return []
+    except Exception as exc:
+        return [], f"GitHub REST search: {exc}"
     if not result.is_ok or result.response is None:
-        return []
+        return [], f"GitHub REST search: {result.err}"
+    if result.response.status_code >= 400:
+        return [], f"GitHub REST search: HTTP {result.response.status_code}"
     try:
         items = result.response.json().get("items", [])
-    except Exception:
-        return []
+    except Exception as exc:
+        return [], f"GitHub REST search: risposta non JSON ({exc})"
     # Rilevanza: la REST search è OR-ish e restituisce rumore (audit giro 4:
     # "pnrr" → post LinkedIn, riordino script…). Teniamo solo le issue il cui
     # titolo contiene tutti i token significativi della query.
@@ -276,7 +293,7 @@ def _search_github_issues(
             "type": "pr" if "pull_request" in item else "issue",
         }
         for item in relevant
-    ]
+    ], None
 
 
 _DISCUSSIONS_SEARCH_QUERY = """
@@ -302,7 +319,7 @@ query($query:String!, $limit:Int!) {
 
 def _search_github_discussions(
     query: str, token: str | None, limit: int = 5
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], str | None]:
     """Top discussioni org-wide sulla query (GraphQL, richiede token).
 
     Le discussioni non esistono nella REST search/issues — vanno cercate
@@ -310,7 +327,7 @@ def _search_github_discussions(
     restituisce zero discussioni.
     """
     if not token:
-        return []
+        return [], "GITHUB_TOKEN non impostato"
     try:
         data = discussions_graphql(
             _DISCUSSIONS_SEARCH_QUERY,
@@ -321,8 +338,8 @@ def _search_github_discussions(
                 "limit": max(1, min(limit, 10)),
             },
         )
-    except Exception:
-        return []
+    except Exception as exc:
+        return [], f"GitHub GraphQL discussions: {exc}"
     nodes = (data.get("search") or {}).get("nodes") or []
     results: list[dict[str, object]] = []
     for node in nodes:
@@ -342,4 +359,4 @@ def _search_github_discussions(
                 "type": "discussion",
             }
         )
-    return results
+    return results, None
