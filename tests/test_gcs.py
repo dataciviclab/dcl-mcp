@@ -338,3 +338,28 @@ def test_gcs_query_limit_and_truncation(monkeypatch, tmp_path, sample_index):
     capped = gcs_tools.gcs_query(slug="demo_ds", sql="SELECT n FROM _data", limit=9999)
     assert capped["limit"] == 500
     assert capped["limit_clamped"] == "9999 → 500 (max consentito)"
+
+
+@pytest.mark.contract
+def test_gcs_query_exact_limit_not_truncated(monkeypatch, tmp_path, sample_index):
+    """Esattamente `limit` righe non è troncamento (audit: falso positivo)."""
+    import duckdb
+
+    import dcl_mcp.gcs.tools as gcs_tools
+
+    parquet = tmp_path / "two.parquet"
+    duckdb.execute(
+        f"COPY (SELECT 1 AS n UNION ALL SELECT 2) TO '{parquet}' (FORMAT PARQUET)"
+    )
+    fake_resolved = {
+        "slug": "demo_ds",
+        "layer": "clean",
+        "gs_path": "gs://dataciviclab-clean/demo/two.parquet",
+        "read_paths": [str(parquet)],
+    }
+    monkeypatch.setattr(gcs_tools, "load_topic_index", lambda: sample_index)
+    monkeypatch.setattr(gcs_tools, "resolve", lambda *_a, **_k: fake_resolved)
+
+    result = gcs_tools.gcs_query(slug="demo_ds", sql="SELECT n FROM _data", limit=2)
+    assert result["n_rows"] == 2
+    assert result["truncated"] is False

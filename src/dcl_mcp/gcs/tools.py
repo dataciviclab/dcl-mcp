@@ -77,7 +77,11 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
             topic = load_topic_index()
             resolved = resolve(topic, slug, layer=layer)
             query = validate_sql(sql)
-            columns, rows = _run_query(resolved["read_paths"], query, safe_limit)
+            # Leggi una riga in più del limite richiesto: serve a distinguere
+            # "esattamente `limit` righe" (non troncato) da "ce n'erano altre".
+            columns, rows = _run_query(resolved["read_paths"], query, safe_limit + 1)
+            truncated = len(rows) > safe_limit
+            rows = rows[:safe_limit]
             payload: dict[str, Any] = {
                 "slug": resolved["slug"],
                 "layer": resolved["layer"],
@@ -85,7 +89,7 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
                 "columns": columns,
                 "n_rows": len(rows),
                 "limit": safe_limit,
-                "truncated": len(rows) >= safe_limit,
+                "truncated": truncated,
                 "rows": rows,
                 "ok": True,
             }
