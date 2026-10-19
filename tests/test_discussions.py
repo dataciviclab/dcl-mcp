@@ -181,30 +181,32 @@ class TestListDiscussions:
         assert "last:" in calls[0]["query"]
         assert "discussions(first:" not in calls[0]["query"]
 
-    def test_category_filter_after_pagination(self, mock_graphql):
-        _calls, resp = mock_graphql
-        nodes = [
-            {**_FAKE_DISCUSSION_NODE, "number": 1, "category": {"name": "Ideas"}},
-            {**_FAKE_DISCUSSION_NODE_OPEN, "number": 2, "category": {"name": "Q&A"}},
-            {**_FAKE_DISCUSSION_NODE_OPEN, "number": 3, "category": {"name": "Ideas"}},
-        ]
-        resp["data"] = {
-            "repository": {
-                "discussions": {
-                    "totalCount": 3,
-                    "pageInfo": {},
-                    "nodes": nodes,
-                }
-            }
-        }
+    def test_category_filter_is_server_side(self, mock_graphql):
+        """category_name usa il qualifier GitHub, non un filtro lato client."""
+        calls, resp = mock_graphql
+        resp["data"] = _FAKE_SEARCH_RESPONSE
 
-        result = list_discussions("owner/repo", category_name="Ideas")
+        result = list_discussions("owner/repo", category_name="Domanda")
 
-        assert result["discussion_count"] == 2
-        assert result["total_count"] == 3
-        assert [d["number"] for d in result["discussions"]] == [1, 3]
-        # total_count resta globale: il payload lo dichiara (audit giro 3)
-        assert "total_count = tutte" in result["note"]
+        assert result["mode"] == "search"
+        assert result["category_name"] == "Domanda"
+        assert "note" not in result
+        q = calls[0]["variables"]["query"]
+        assert 'category:"Domanda"' in q
+        # solo categoria → ordine per updated recente
+        assert "sort:updated-desc" in q
+        assert result["discussion_count"] == 1
+
+    def test_category_and_query_combined(self, mock_graphql):
+        calls, resp = mock_graphql
+        resp["data"] = _FAKE_SEARCH_RESPONSE
+
+        list_discussions("owner/repo", category_name="Domanda", query="rifiuti")
+
+        q = calls[0]["variables"]["query"]
+        assert 'category:"Domanda"' in q
+        assert q.endswith("rifiuti")
+        assert "sort:updated-desc" not in q
 
     def test_empty_response(self, mock_graphql):
         _calls, resp = mock_graphql

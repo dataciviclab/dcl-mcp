@@ -24,14 +24,12 @@ HUB_REPO = "dataciviclab/dataciviclab"
 
 @mcp.tool(
     description=(
-        "Elenca le GitHub Discussions di un repository, ordinate per UPDATED_AT discendente. "
-        "Default: repo hub dataciviclab/dataciviclab. "
-        "Opzionalmente filtra per categoria (applicato lato client dopo paginazione — "
-        "con paginazione attiva, discussion_count puo' essere 0 anche se discussioni "
-        "della categoria esistono piu' avanti). "
-        "Supporta cursor pagination: passa il valore 'end_cursor' della risposta "
-        "precedente come 'after' per la pagina successiva. "
-        "Con query=: full-text search repo-scoped (mode='search', cursori ignorati)."
+        "Elenca le GitHub Discussions di un repository (default: hub del Lab). "
+        "Senza query/category: ordinate per UPDATED_AT discendente, con cursor "
+        "pagination 'after'/'before'. "
+        "Con query= e/o category_name: full-text search server-side (mode='search', "
+        "paginazione 'after'); category_name è un qualifier GitHub, non un filtro "
+        "lato client."
     ),
     structured_output=True,
 )
