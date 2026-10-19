@@ -1,13 +1,14 @@
-"""Tool MCP context — orientamento, navigazione e refresh degli artefatti.
+"""Tool MCP context — orientamento e navigazione degli artefatti.
 
 Nomi invariati rispetto al vecchio server ``dataciviclab-context`` (ACB):
 contratto pubblico usato da skill, config utente e docs del Lab.
+``refresh_context`` è stato rimosso: il rebuild degli artefatti è un'azione
+operativa che si lancia dalla CLI/CI di ACB, non da un MCP per esterni.
 """
 
 from __future__ import annotations
 
 import json
-import time
 from typing import Any
 
 from lab_connectors.mcp import guard_timed
@@ -16,9 +17,6 @@ from dcl_mcp.app import get_env, mcp
 from dcl_mcp.context import fetch as ctx_fetch
 from dcl_mcp.context.search import explore_ref, lab_map_summary, search_index
 from dcl_mcp.discussions.client import _graphql as discussions_graphql
-
-_REFRESH_MIN_INTERVAL = 60
-_last_refresh_attempt: float | None = None
 
 
 @mcp.tool(
@@ -152,7 +150,7 @@ def find(
         results = search_index(data, query, entity_type=type, domain=domain, limit=limit)
         payload: dict[str, Any] = {
             "query": query,
-            "total": len(results),
+            "total_catalog": len(results),
             "results": results,
             "ok": True,
         }
@@ -160,7 +158,10 @@ def find(
             token = get_env("GITHUB_TOKEN")
             payload["issues"] = _search_github_issues(query, token, limit)
             payload["discussions"] = _search_github_discussions(query, token, min(limit, 5))
-            payload["total"] += len(payload["issues"]) + len(payload["discussions"])
+            payload["total_external"] = len(payload["issues"]) + len(payload["discussions"])
+        # total resta la somma esplicita: prima veniva gonfiato in-place e
+        # non significava più "match nel catalogo".
+        payload["total"] = payload["total_catalog"] + payload.get("total_external", 0)
         return {"content": payload, "ok": True}
 
     return guard_timed(_exec, "find")
@@ -225,55 +226,6 @@ def explore(ref: str) -> dict[str, object]:
         return {"content": content, "ok": True}
 
     return guard_timed(_exec, "explore")
-
-
-@mcp.tool(
-    description=(
-        "Trigger a new context build on CI. "
-        "Requires GITHUB_TOKEN with workflow scope. "
-        "Artifacts updated within ~1 minute. Rate limit: 2 dispatches/hour."
-    ),
-    structured_output=True,
-)
-def refresh_context() -> dict[str, object]:
-    def _exec() -> dict[str, Any]:
-        global _last_refresh_attempt
-
-        token = get_env("GITHUB_TOKEN")
-        if not token:
-            return {"ok": False, "error": "GITHUB_TOKEN non impostato."}
-
-        now = time.monotonic()
-        if _last_refresh_attempt is not None:
-            elapsed = now - _last_refresh_attempt
-            if elapsed < _REFRESH_MIN_INTERVAL:
-                wait = _REFRESH_MIN_INTERVAL - elapsed
-                return {
-                    "ok": False,
-                    "error": f"Rate limit. Aspetta ~{int(wait)}s.",
-                    "retry_after": int(wait),
-                }
-
-        _last_refresh_attempt = now
-        client = ctx_fetch.get_http()
-        result = client.post(
-            f"{ctx_fetch.API_BASE}/actions/workflows/build-context.yml/dispatches",
-            json={"ref": "main"},
-            headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
-        )
-
-        if not result.is_ok or result.response is None:
-            return {"ok": False, "error": f"Errore di rete: {result.err}"}
-
-        if result.response.status_code == 204:
-            ctx_fetch.artifact_cache.clear()
-            return {"ok": True, "message": "Build triggerato. Aggiornamento entro ~1 minuto."}
-        elif result.response.status_code == 422:
-            return {"ok": False, "error": "Build rifiutato (422). Verifica workflow su main."}
-        else:
-            return {"ok": False, "error": f"Errore {result.response.status_code}"}
-
-    return guard_timed(_exec, "refresh_context")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -354,8 +306,8 @@ def _search_github_discussions(
     """Top discussioni org-wide sulla query (GraphQL, richiede token).
 
     Le discussioni non esistono nella REST search/issues — vanno cercate
-    via GraphQL type:DISCUSSION (friction: find(include_github) a zero
-    discussioni nonostante il tool github_search_discussions esista).
+    via GraphQL type:DISCUSSION, altrimenti ``find(include_github=True)``
+    restituisce zero discussioni.
     """
     if not token:
         return []

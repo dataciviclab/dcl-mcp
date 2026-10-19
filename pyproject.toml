@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dcl-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server del DataCivicLab — contesto org-wide, GitHub Discussions e query sui dati pubblici (GCS)."
 readme = "README.md"
 license = { text = "MIT" }

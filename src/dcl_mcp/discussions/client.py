@@ -107,16 +107,19 @@ def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
 
 def _discussion_node_to_summary(node: dict[str, Any]) -> dict[str, Any]:
     category = node.get("category") or {}
+    labels = ((node.get("labels") or {}).get("nodes")) or []
     return {
         "number": node.get("number"),
         "title": node.get("title"),
         "url": node.get("url"),
         "category": category.get("name"),
+        "author": ((node.get("author") or {}).get("login")),
         "created_at": node.get("createdAt"),
         "updated_at": node.get("updatedAt"),
         "answer_chosen": bool(node.get("answerChosenAt")),
         "closed": bool(node.get("closed")),
         "closed_at": node.get("closedAt"),
+        "labels": [{"name": lbl.get("name"), "color": lbl.get("color")} for lbl in labels],
     }
 
 
@@ -143,6 +146,15 @@ def _comment_node_to_dict(
             for reply in replies
         ],
     }
+
+
+def _clamp_excerpt(value: int, minimum: int = 80, maximum: int = 2000) -> int:
+    """Clamp unico per gli excerpt di body e commenti."""
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = minimum
+    return max(minimum, min(requested, maximum))
 
 
 def _excerpt(text: str, max_chars: int = 280) -> str:
@@ -220,75 +232,46 @@ def list_discussion_categories(repo_full_name: str) -> dict[str, Any]:
     }
 
 
-def search_discussions(repo_full_name: str, query: str, limit: int = 10) -> dict[str, Any]:
-    """Cerca discussions in un repository per testo libero.
-
-    Usa la GitHub GraphQL Search API (type: DISCUSSION) per full-text search
-    su titolo, body e commenti. Limita i risultati al repository specificato.
-    """
-    if not query.strip():
-        raise GitHubDiscussionsClientError("query di ricerca vuota")
-
-    owner, name = _split_repo(repo_full_name)
-    safe_limit = max(1, min(limit, 50))
-    search_query = f"repo:{owner}/{name} {query.strip()}"
-
-    q = """
-    query($query:String!, $limit:Int!) {
-      search(query:$query, type:DISCUSSION, first:$limit) {
-        discussionCount
-        nodes {
-          ... on Discussion {
-            number
-            title
-            url
-            createdAt
-            updatedAt
-            answerChosenAt
-            closed
-            closedAt
-            category { name }
-            author { login }
-            labels(first:10) {
-              nodes { name color }
-            }
-          }
-        }
+_SEARCH_DISCUSSIONS_QUERY = """
+query($query:String!, $limit:Int!) {
+  search(query:$query, type:DISCUSSION, first:$limit) {
+    discussionCount
+    nodes {
+      ... on Discussion {
+        number
+        title
+        url
+        createdAt
+        updatedAt
+        answerChosenAt
+        closed
+        closedAt
+        category { name }
+        author { login }
+        labels(first:10) { nodes { name color } }
       }
     }
-    """
-    data = _graphql(q, {"query": search_query, "limit": safe_limit})
-    search_payload = data.get("search") or {}
-    nodes = search_payload.get("nodes") or []
-    results = []
-    for node in nodes:
-        category = node.get("category") or {}
-        labels_nodes = ((node.get("labels") or {}).get("nodes")) or []
-        results.append(
-            {
-                "number": node.get("number"),
-                "title": node.get("title"),
-                "url": node.get("url"),
-                "category": category.get("name"),
-                "author": ((node.get("author") or {}).get("login")),
-                "created_at": node.get("createdAt"),
-                "updated_at": node.get("updatedAt"),
-                "answer_chosen": bool(node.get("answerChosenAt")),
-                "closed": bool(node.get("closed")),
-                "closed_at": node.get("closedAt"),
-                "labels": [
-                    {"name": lbl.get("name"), "color": lbl.get("color")} for lbl in labels_nodes
-                ],
-            }
-        )
+  }
+}
+"""
 
-    return {
-        "repo_full_name": repo_full_name,
-        "query": query.strip(),
-        "limit": safe_limit,
-        "discussion_count": search_payload.get("discussionCount") or len(results),
-        "results": results,
-    }
+
+def _search_nodes(
+    repo_full_name: str, query: str, limit: int
+) -> tuple[int, list[dict[str, Any]]]:
+    """Search GraphQL repo-scoped: un solo path per search e list(query=)."""
+    if not query.strip():
+        raise GitHubDiscussionsClientError("query di ricerca vuota")
+    owner, name = _split_repo(repo_full_name)
+    safe_limit = max(1, min(limit, 50))
+    data = _graphql(
+        _SEARCH_DISCUSSIONS_QUERY,
+        {"query": f"repo:{owner}/{name} {query.strip()}", "limit": safe_limit},
+    )
+    payload = data.get("search") or {}
+    nodes = payload.get("nodes") or []
+    results = [_discussion_node_to_summary(n) for n in nodes if isinstance(n, dict)]
+    return payload.get("discussionCount") or len(results), results
 
 
 def list_discussions(
@@ -297,8 +280,9 @@ def list_discussions(
     limit: int = 10,
     after: str | None = None,
     before: str | None = None,
+    query: str | None = None,
 ) -> dict[str, Any]:
-    """Elenca discussions ordinate per UPDATED_AT discendente.
+    """Elenca discussions, oppure cerca se ``query`` è presente.
 
     Supporta cursor pagination con i parametri ``after`` e ``before``
     (passa il ``cursor`` dalla risposta precedente).
@@ -311,6 +295,24 @@ def list_discussions(
     owner, name = _split_repo(repo_full_name)
     safe_limit = max(1, min(limit, 50))
 
+    if query and query.strip():
+        count, results = _search_nodes(repo_full_name, query, safe_limit)
+        if category_name and category_name.strip():
+            wanted = category_name.strip().casefold()
+            results = [
+                r for r in results if (r.get("category") or "").casefold() == wanted
+            ]
+        return {
+            "repo_full_name": repo_full_name,
+            "query": query.strip(),
+            "mode": "search",
+            "category_name": category_name,
+            "limit": safe_limit,
+            "total_count": count,
+            "discussion_count": len(results),
+            "discussions": results,
+        }
+
     if before:
         # backward pagination — usa last + before
         query = """
@@ -322,6 +324,8 @@ def list_discussions(
               nodes {
                 number title url createdAt updatedAt answerChosenAt closed closedAt
                 category { name }
+                author { login }
+                labels(first:10) { nodes { name color } }
               }
             }
           }
@@ -344,6 +348,8 @@ def list_discussions(
               nodes {
                 number title url createdAt updatedAt answerChosenAt closed closedAt
                 category { name }
+                author { login }
+                labels(first:10) { nodes { name color } }
               }
             }
           }
@@ -370,6 +376,7 @@ def list_discussions(
 
     payload = {
         "repo_full_name": repo_full_name,
+        "mode": "list",
         "category_name": category_name,
         "limit": safe_limit,
         "total_count": discussions_payload.get("totalCount") or len(discussions),
@@ -394,14 +401,62 @@ def list_discussions(
 
 
 def get_discussion(
-    repo_full_name: str, number: int, mode: str = "full", excerpt_chars: int = 500
+    repo_full_name: str,
+    number: int,
+    mode: str = "full",
+    excerpt_chars: int = 500,
+    include_comments: bool = False,
+    comments_limit: int = 20,
+    comments_mode: str = "full",
+    comments_excerpt_chars: int = 200,
 ) -> dict[str, Any]:
-    """Recupera una discussion per numero con body intero o riepilogo."""
+    """Recupera una discussion, opzionalmente con i commenti.
+
+    ``include_comments`` evita una seconda chiamata per i commenti: le
+    skill leggevano sempre body e thread insieme.
+    """
     owner, name = _split_repo(repo_full_name)
-    query = """
-    query($owner:String!, $name:String!, $number:Int!) {
-      repository(owner:$owner, name:$name) {
-        discussion(number:$number) {
+    safe_mode = mode if mode in ("full", "summary") else "full"
+    safe_excerpt = _clamp_excerpt(excerpt_chars)
+    safe_comments_limit = max(1, min(comments_limit, 50))
+    safe_comments_mode = comments_mode if comments_mode in ("full", "summary") else "full"
+    safe_comments_excerpt = (
+        _clamp_excerpt(comments_excerpt_chars, maximum=1000)
+        if safe_comments_mode == "summary"
+        else None
+    )
+
+    comments_block = (
+        """
+          comments(first:$commentsLimit) {
+            totalCount
+            nodes {
+              id
+              body
+              createdAt
+              author { login }
+              replies(first:10) {
+                totalCount
+                nodes {
+                  id
+                  body
+                  createdAt
+                  author { login }
+                }
+              }
+            }
+          }"""
+        if include_comments
+        else ""
+    )
+    variables: dict[str, Any] = {"owner": owner, "name": name, "number": number}
+    if include_comments:
+        variables["commentsLimit"] = safe_comments_limit
+    comments_var = ", $commentsLimit:Int!" if include_comments else ""
+    query = f"""
+    query($owner:String!, $name:String!, $number:Int!{comments_var}) {{
+      repository(owner:$owner, name:$name) {{
+        discussion(number:$number) {{
           id
           number
           title
@@ -412,12 +467,12 @@ def get_discussion(
           answerChosenAt
           closed
           closedAt
-          category { name }
-        }
-      }
-    }
+          category {{ name }}{comments_block}
+        }}
+      }}
+    }}
     """
-    data = _graphql(query, {"owner": owner, "name": name, "number": number})
+    data = _graphql(query, variables)
     discussion = ((data.get("repository") or {}).get("discussion")) or None
     if not discussion:
         raise GitHubDiscussionsClientError(f"Discussion #{number} non trovata in {repo_full_name}")
@@ -435,103 +490,29 @@ def get_discussion(
         "answer_chosen": bool(discussion.get("answerChosenAt")),
         "closed": bool(discussion.get("closed")),
         "closed_at": discussion.get("closedAt"),
-        "mode": mode,
+        "mode": safe_mode,
     }
-
-    safe_mode = mode if mode in ("full", "summary") else "full"
-    safe_excerpt = max(80, min(excerpt_chars, 2000))
 
     if safe_mode == "summary":
         body_text = discussion.get("body", "")
         base["body_excerpt"] = _excerpt(body_text, safe_excerpt)
         base["body_chars"] = len(body_text) if body_text else 0
         base["excerpt_chars"] = safe_excerpt
-        return base
+    else:
+        base["body"] = discussion.get("body", "")
 
-    return {**base, "body": discussion.get("body", "")}
+    if include_comments:
+        payload_comments = discussion.get("comments") or {}
+        nodes = payload_comments.get("nodes") or []
+        comments = [
+            _comment_node_to_dict(n, max_body_chars=safe_comments_excerpt) for n in nodes
+        ]
+        base["comments"] = comments
+        base["comment_count"] = len(comments)
+        base["total_comment_count"] = payload_comments.get("totalCount") or len(comments)
+        base["comments_mode"] = safe_comments_mode
 
-
-def get_discussion_summary(
-    repo_full_name: str, number: int, excerpt_chars: int = 280
-) -> dict[str, Any]:
-    """Restituisce un riepilogo breve di una discussion."""
-    discussion = get_discussion(repo_full_name, number)
-    safe_excerpt_chars = max(80, min(excerpt_chars, 600))
-    return {
-        "repo_full_name": discussion["repo_full_name"],
-        "discussion_id": discussion["discussion_id"],
-        "number": discussion["number"],
-        "title": discussion["title"],
-        "url": discussion["url"],
-        "category": discussion["category"],
-        "created_at": discussion["created_at"],
-        "updated_at": discussion["updated_at"],
-        "answer_chosen": discussion["answer_chosen"],
-        "closed": discussion["closed"],
-        "closed_at": discussion["closed_at"],
-        "body_excerpt": _excerpt(discussion.get("body", ""), safe_excerpt_chars),
-        "excerpt_chars": safe_excerpt_chars,
-    }
-
-
-def get_discussion_comments(
-    repo_full_name: str,
-    number: int,
-    limit: int = 20,
-    mode: str = "full",
-    excerpt_chars: int = 200,
-) -> dict[str, Any]:
-    """Recupera commenti e reply annidate di una discussion."""
-    owner, name = _split_repo(repo_full_name)
-    safe_limit = max(1, min(limit, 50))
-    safe_mode = mode if mode in ("full", "summary") else "full"
-    safe_excerpt = max(80, min(excerpt_chars, 1000)) if safe_mode == "summary" else None
-    query = """
-    query($owner:String!, $name:String!, $number:Int!, $limit:Int!) {
-      repository(owner:$owner, name:$name) {
-        discussion(number:$number) {
-          id
-          comments(first:$limit) {
-            totalCount
-            nodes {
-              id
-              body
-              createdAt
-              author { login }
-              replies(first:10) {
-                totalCount
-                nodes {
-                  id
-                  body
-                  createdAt
-                  author { login }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    """
-    data = _graphql(
-        query,
-        {"owner": owner, "name": name, "number": number, "limit": safe_limit},
-    )
-    discussion = ((data.get("repository") or {}).get("discussion")) or None
-    if not discussion:
-        raise GitHubDiscussionsClientError(f"Discussion #{number} non trovata in {repo_full_name}")
-    comments_payload = discussion.get("comments") or {}
-    nodes = comments_payload.get("nodes") or []
-    comments = [_comment_node_to_dict(node, max_body_chars=safe_excerpt) for node in nodes]
-    return {
-        "repo_full_name": repo_full_name,
-        "number": number,
-        "limit": safe_limit,
-        "mode": safe_mode,
-        "comment_count": len(comments),
-        "total_comment_count": comments_payload.get("totalCount") or len(comments),
-        "comments": comments,
-    }
+    return base
 
 
 def create_discussion(

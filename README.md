@@ -10,20 +10,18 @@ pip install "dcl-mcp @ git+https://github.com/dataciviclab/dcl-mcp.git"
 
 ## Cosa espone
 
-Un solo server, nome `dataciviclab` — 15 tool in tre famiglie:
+Un solo server, nome `dataciviclab` — 11 tool in tre famiglie:
 
 | Famiglia | Tool | Cosa fa |
 |---|---|---|
 | **Context** | `session_bootstrap` | Orientamento rapido (markdown) |
 | | `lab_map(domain=)` | Albero domains → repos → sources (dominio sconosciuto → elenco domini validi) |
-| | `find(query, type=, domain=)` | Ricerca ranked cross-entity (AND cross-field su token) |
+| | `find(query, type=, domain=)` | Ricerca ranked cross-entity (AND cross-field su token); `total_catalog` + `total_external` |
 | | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis — ref tipizzabili (`analysis:slug`, `repo:slug`, …) |
 | | `workspace_triage(section=)` | Stato Lab: radar, PR, issues, discussions… |
-| | `refresh_context()` | Trigger rebuild CI degli artefatti (serve `GITHUB_TOKEN`) |
-| **Discussions** | `github_list_discussions` | Elenca discussioni (cursor pagination, filtro categoria) |
+| **Discussions** | `github_list_discussions(query=)` | Elenca (cursor pagination, filtro categoria) o cerca full-text se `query=` |
 | | `github_list_discussion_categories` | Categorie valide per la creazione (nome + slug) |
-| | `github_get_discussion` / `_summary` / `_comments` | Leggi una discussion e i commenti |
-| | `github_search_discussions` | Full-text search nel repo |
+| | `github_get_discussion(include_comments=)` | Legge una discussion; con `include_comments=true` aggiunge commenti e reply in una sola chiamata |
 | | `github_create_discussion` / `github_add_discussion_comment` | Partecipa (scrittura) |
 | **GCS** | `gcs_query(slug, sql, layer=, limit=)` | SELECT/CTE read-only sui parquet pubblici |
 
@@ -36,7 +34,7 @@ find("rifiuti urbani")            # scopri dataset/analisi/repo
   → gcs_query(slug=…, sql=…)      # SELECT o WITH…SELECT su `_data`,
                                   # layer=mart per le tabelle mart
   → find(…, include_github=true)  # issue/PR aperte + discussioni open del tema
-  → github_get_discussion / _comments
+  → github_get_discussion(number=…, include_comments=True)
   → github_list_discussion_categories → github_create_discussion
 ```
 
@@ -60,7 +58,7 @@ find("rifiuti urbani")            # scopri dataset/analisi/repo
 
 | Env var | Ruolo | Obbligatoria |
 |---|---|---|
-| `GITHUB_TOKEN` | Discussions (GraphQL richiede auth anche in lettura) + `refresh_context` | sì, per discussions/write |
+| `GITHUB_TOKEN` | Discussions (GraphQL richiede auth anche in lettura) | sì, per discussions/write |
 | `DCL_MCP_ENV_FILE` | Path a un file `.env` (fallback: `.env` cercato verso l'alto dal cwd) | no |
 | `ACB_REPO` / `ACB_BRANCH` | Sorgente artefatti contesto (default: ACB, branch `context`) | no |
 
@@ -85,6 +83,16 @@ find("rifiuti urbani")            # scopri dataset/analisi/repo
 - **Ref tipizzati**: in caso di collisione di slug (es. repo e analysis
   con lo stesso nome) `explore("analysis:slug")` forza il tipo; senza
   prefisso l'ordine è dataset → repo → domain → source → analysis.
+- **Rimozioni (v0.2)**: `github_get_discussion_summary` →
+  `github_get_discussion(mode="summary")`;
+  `github_get_discussion_comments` →
+  `github_get_discussion(include_comments=True)`;
+  `github_search_discussions` → `github_list_discussions(query=…)`.
+  `refresh_context` è stato rimosso: il rebuild degli artefatti è
+  un'azione operativa da CLI/CI di ACB, non da un MCP per esterni.
+- **`find.total`** = `total_catalog` + `total_external` (quest'ultimo solo
+  con `include_github=true`): prima veniva gonfiato sommando issue e
+  discussioni ai risultati del catalogo.
 - I nomi dei tool sono contratti cross-repo (skill, docs, config utente):
   non vanno cambiati senza migrazione.
 

@@ -41,5 +41,5 @@ mypy src/dcl_mcp/
 ## Note
 
 - `GITHUB_TOKEN` è opzionale per context e `gcs_query`, obbligatorio per
-  le discussions (GraphQL autenticato) e `refresh_context`.
+  le discussions (GraphQL autenticato).
 - I test `smoke` usano la rete: sono esclusi dalla CI (`-m "not smoke"`).
