@@ -209,6 +209,73 @@ def test_validate_sql_quoted_column_not_false_positive():
     )
 
 
+@pytest.mark.regression
+def test_validate_sql_rejects_data_substring_bypass():
+    """Il vecchio check era `"_data" in sql`: bastava una stringa per passare.
+
+    `SELECT 1 WHERE '_data' = '_data'` non toccava `_data` e veniva eseguita.
+    """
+    for bad in (
+        "SELECT 1 WHERE '_data' = '_data'",
+        "SELECT 'x_data' AS col",
+        "SELECT * FROM _data WHERE nota = '_data'",
+    ):
+        if "FROM _data" in bad:
+            # Il riferimento alla tabella è reale: la query è legittima.
+            assert validate_sql(bad) == bad
+            continue
+        with pytest.raises(GcsResolveError, match="_data"):
+            validate_sql(bad)
+
+
+@pytest.mark.regression
+def test_validate_sql_rejects_filesystem_functions():
+    """Nessuna table function di lettura: l'unica sorgente è `_data`.
+
+    `SELECT content FROM read_text('/etc/hostname') WHERE '_data' = '_data'`
+    leggeva un file locale prima di questo check.
+    """
+    for bad in (
+        "SELECT content FROM read_text('/etc/hostname') WHERE '_data' = '_data'",
+        "SELECT * FROM read_parquet('https://example.com/x.parquet') WHERE '_data' = '_data'",
+        "SELECT * FROM glob('/home/*') WHERE '_data' = '_data'",
+        "SELECT * FROM parquet_scan('/tmp/x.parquet') WHERE '_data' = '_data'",
+        "SELECT * FROM sqlite_scan('/tmp/x.db', 't') WHERE '_data' = '_data'",
+        "SELECT * FROM _data WHERE read_text('/etc/passwd') IS NOT NULL",
+    ):
+        with pytest.raises(GcsResolveError, match="non permessa"):
+            validate_sql(bad)
+
+
+@pytest.mark.regression
+def test_validate_sql_rejects_unknown_source():
+    with pytest.raises(GcsResolveError, match="Sorgente non permessa"):
+        validate_sql("SELECT * FROM altre_tabelle")
+    with pytest.raises(GcsResolveError, match="Sorgente non permessa"):
+        validate_sql("SELECT * FROM _data JOIN segreto USING (id)")
+    # CTE mai definita
+    with pytest.raises(GcsResolveError, match="Sorgente non permessa"):
+        validate_sql("SELECT * FROM fantasma")
+
+
+def test_validate_sql_allows_cte_chain_and_unnest():
+    cte = "WITH a AS (SELECT anno FROM _data), b AS (SELECT * FROM a) SELECT * FROM b"
+    assert validate_sql(cte) == cte
+    assert validate_sql("SELECT unnest([1, 2]) AS n, count(*) FROM _data") == (
+        "SELECT unnest([1, 2]) AS n, count(*) FROM _data"
+    )
+    # Sottoquery in FROM: la sorgente interna è comunque `_data`.
+    assert validate_sql("SELECT * FROM (SELECT anno FROM _data) t") == (
+        "SELECT * FROM (SELECT anno FROM _data) t"
+    )
+    # Spine temporali: generatori in memoria, non letture dal filesystem.
+    spine = "SELECT a.anno FROM generate_series(2010, 2024) AS a(anno) CROSS JOIN _data"
+    assert validate_sql(spine) == spine
+    assert validate_sql("SELECT * FROM range(3) AS r(i) CROSS JOIN _data") == (
+        "SELECT * FROM range(3) AS r(i) CROSS JOIN _data"
+    )
+
+
 # ── mart_card_detail ──────────────────────────────────────────────────────────
 
 
@@ -308,6 +375,36 @@ def test_gcs_query_end_to_end_local_parquet(monkeypatch, tmp_path, sample_index)
     assert result["n_rows"] == 2
     assert result["rows"][0] == [1, "Roma"]
     assert result["truncated"] is False
+
+
+@pytest.mark.regression
+def test_gcs_query_blocks_local_file_read(monkeypatch, tmp_path, sample_index):
+    """Exploit reale: la query leggeva un file locale e tornava ok=true."""
+    import duckdb
+
+    import dcl_mcp.gcs.tools as gcs_tools
+
+    parquet = tmp_path / "demo_clean.parquet"
+    duckdb.execute(f"COPY (SELECT 1 AS anno) TO '{parquet}' (FORMAT PARQUET)")
+    secret = tmp_path / "segreto.txt"
+    secret.write_text("non-deve-uscire", encoding="utf-8")
+
+    fake_resolved = {
+        "slug": "demo_ds",
+        "layer": "clean",
+        "gs_path": f"gs://dataciviclab-clean/demo/{parquet.name}",
+        "read_paths": [str(parquet)],
+    }
+    monkeypatch.setattr(gcs_tools, "load_topic_index", lambda: sample_index)
+    monkeypatch.setattr(gcs_tools, "resolve", lambda *_a, **_k: fake_resolved)
+
+    result = gcs_tools.gcs_query(
+        slug="demo_ds",
+        sql=f"SELECT content FROM read_text('{secret}') WHERE '_data' = '_data'",
+    )
+    assert result["ok"] is False
+    assert "non permessa" in result["error"]
+    assert "non-deve-uscire" not in str(result)
 
 
 @pytest.mark.contract

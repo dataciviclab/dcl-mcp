@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from lab_connectors.http import HttpResult
+from lab_connectors.testing import FakeHttpClient, fake_response
 
+import dcl_mcp.app as app
 from dcl_mcp.discussions.client import (
-    _GITHUB_TOKEN_ENV_VARS,
+    API_URL,
     GitHubDiscussionsClientError,
     _get_token,
     _split_repo,
@@ -16,6 +19,7 @@ from dcl_mcp.discussions.client import (
     get_discussion,
     list_discussion_categories,
     list_discussions,
+    search_org_discussions,
 )
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -30,6 +34,7 @@ _FAKE_DISCUSSION_NODE = {
     "closed": True,
     "closedAt": "2026-06-02T15:55:00Z",
     "category": {"name": "Ideas"},
+    "repository": {"nameWithOwner": "dataciviclab/dataciviclab"},
 }
 
 _FAKE_DISCUSSION_NODE_OPEN = {**_FAKE_DISCUSSION_NODE, "closed": False, "closedAt": None}
@@ -65,6 +70,7 @@ _FAKE_SEARCH_RESPONSE = {
                 "category": {"name": "Ideas"},
                 "author": {"login": "testuser"},
                 "labels": {"nodes": [{"name": "bug", "color": "d73a4a"}]},
+                "repository": {"nameWithOwner": "dataciviclab/rifiuti-urbani"},
             }
         ],
     }
@@ -92,34 +98,33 @@ def mock_graphql(monkeypatch):
 
 @pytest.mark.pure_unit
 class TestGetToken:
-    def test_first_var_used(self, monkeypatch):
-        for var in _GITHUB_TOKEN_ENV_VARS:
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self, monkeypatch):
+        """Niente .env reale del workspace: get_env carica in modo lazy."""
+        monkeypatch.setattr(app, "_ENV_LOADED", True)
+        for var in app.GITHUB_TOKEN_ENV_VARS:
             monkeypatch.delenv(var, raising=False)
-        monkeypatch.setenv(_GITHUB_TOKEN_ENV_VARS[0], "token-a")
+
+    def test_first_var_used(self, monkeypatch):
+        monkeypatch.setenv(app.GITHUB_TOKEN_ENV_VARS[0], "token-a")
         assert _get_token() == "token-a"
 
     def test_second_var_fallback(self, monkeypatch):
-        for var in _GITHUB_TOKEN_ENV_VARS:
-            monkeypatch.delenv(var, raising=False)
-        monkeypatch.setenv(_GITHUB_TOKEN_ENV_VARS[1], "token-b")
+        monkeypatch.setenv(app.GITHUB_TOKEN_ENV_VARS[1], "token-b")
         assert _get_token() == "token-b"
 
     def test_third_var_fallback(self, monkeypatch):
-        for var in _GITHUB_TOKEN_ENV_VARS:
-            monkeypatch.delenv(var, raising=False)
-        monkeypatch.setenv(_GITHUB_TOKEN_ENV_VARS[2], "token-c")
+        monkeypatch.setenv(app.GITHUB_TOKEN_ENV_VARS[2], "token-c")
         assert _get_token() == "token-c"
 
-    def test_raises_when_missing(self, monkeypatch):
-        for var in _GITHUB_TOKEN_ENV_VARS:
-            monkeypatch.delenv(var, raising=False)
+    def test_raises_when_missing(self):
         with pytest.raises(GitHubDiscussionsClientError, match="Nessun token"):
             _get_token()
 
     def test_precedence_order(self, monkeypatch):
-        for var in _GITHUB_TOKEN_ENV_VARS:
+        for var in app.GITHUB_TOKEN_ENV_VARS:
             monkeypatch.setenv(var, f"value-{var}")
-        assert _get_token() == f"value-{_GITHUB_TOKEN_ENV_VARS[0]}"
+        assert _get_token() == f"value-{app.GITHUB_TOKEN_ENV_VARS[0]}"
 
 
 # ── _split_repo ───────────────────────────────────────────────────────────────
@@ -159,6 +164,8 @@ class TestListDiscussions:
         disc = result["discussions"][0]
         assert disc["number"] == 42
         assert disc["closed"] is True
+        # Stessa forma della search: `repo` sempre presente.
+        assert disc["repo"] == "dataciviclab/dataciviclab"
         assert result["page_info"]["has_next"] is False
         assert calls[0]["variables"]["after"] is None
 
@@ -381,3 +388,59 @@ class TestMutations:
     def test_add_comment_requires_valid_repo(self, mock_graphql):
         with pytest.raises(GitHubDiscussionsClientError, match="owner/repo"):
             add_discussion_comment("invalid", 42, "body")
+
+
+# ── trasporto HTTP condiviso ──────────────────────────────────────────────────
+
+
+@pytest.mark.adapter
+def test_graphql_uses_shared_client_and_bearer(monkeypatch):
+    """Un solo client HTTP per tutto il server (niente httpx dedicato)."""
+    fake = FakeHttpClient()
+    fake.responses[API_URL] = HttpResult(
+        response=fake_response(200, json_data={"data": {"ok": 1}}), err=None
+    )
+    monkeypatch.setattr(app, "_http", fake)
+    monkeypatch.setattr(app, "_ENV_LOADED", True)
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    from dcl_mcp.discussions.client import _graphql
+
+    assert _graphql("query { x }", {"a": 1}) == {"ok": 1}
+
+    method, url, kwargs = fake.requests[0]
+    assert (method, url) == ("POST", API_URL)
+    assert kwargs["headers"]["Authorization"] == "Bearer tok"
+    assert kwargs["json"]["variables"] == {"a": 1}
+
+
+@pytest.mark.adapter
+def test_graphql_transport_error_is_client_error(monkeypatch):
+    """Timeout/connessione: HttpClient non solleva, l'errore arriva in `err`."""
+    fake = FakeHttpClient()
+    fake.responses[API_URL] = HttpResult(response=None, err=TimeoutError("timeout"))
+    monkeypatch.setattr(app, "_http", fake)
+    monkeypatch.setattr(app, "_ENV_LOADED", True)
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    from dcl_mcp.discussions.client import _graphql
+
+    with pytest.raises(GitHubDiscussionsClientError, match="Errore HTTP"):
+        _graphql("query { x }", {})
+
+
+# ── search org-wide (condivisa con find) ──────────────────────────────────────
+
+
+@pytest.mark.contract
+def test_search_org_discussions_open_only(mock_graphql):
+    calls, resp = mock_graphql
+    resp["data"] = _FAKE_SEARCH_RESPONSE
+
+    results = search_org_discussions("rifiuti", limit=3)
+
+    q = calls[0]["variables"]["query"]
+    assert q.startswith("org:dataciviclab")
+    assert q.endswith("is:open")
+    assert results[0]["repo"] == "dataciviclab/rifiuti-urbani"
+    assert results[0]["number"] == 42

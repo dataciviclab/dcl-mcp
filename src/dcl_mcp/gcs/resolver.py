@@ -242,6 +242,26 @@ _SQL_RULES = (
     "niente COPY/INSERT/UPDATE/DELETE/PRAGMA e simili."
 )
 
+# `_data` è l'unica sorgente ammessa, quindi le table function che leggono
+# filesystem o database esterni non hanno uso legittimo: senza questo check
+# `SELECT * FROM read_text('/etc/hostname') WHERE '_data' = '_data'` passava
+# (il vecchio controllo era una substring su `_data`).
+_TABLE_FUNCTION = re.compile(
+    r"(?i)\b(read_[a-z0-9_]+|parquet_[a-z0-9_]+|[a-z0-9_]+_scan|[a-z0-9_]+_query|glob)\s*\("
+)
+# Sorgenti di righe: `_data`, una CTE, o una table function (già bloccata
+# sopra). Le subquery iniziano con "(" e non vengono catturate.
+_FROM_TARGET = re.compile(r'(?i)\b(?:FROM|JOIN)\s+("[^"]+"|[A-Za-z_][\w.$]*)')
+_CTE_NAME = re.compile(
+    r'(?i)(?:\bWITH\b(?:\s+RECURSIVE\b)?|,)\s*("[^"]+"|[A-Za-z_]\w*)\s*'
+    r"(?:\([^)]*\))?\s+AS\s*\("
+)
+_SOURCE_TABLE = "_data"
+# Table function innocue: generano righe in memoria, non leggono l'esterno.
+# `range`/`generate_series` servono alle spine temporali delle analisi
+# (es. anni mancanti in una serie), non toccano il filesystem.
+_ALLOWED_TABLE_FUNCTIONS = frozenset({"unnest", "range", "generate_series"})
+
 
 def _strip_quoted(text: str) -> str:
     """Rimuove stringhe e identificatori quotati prima del check keyword.
@@ -256,13 +276,37 @@ def _strip_quoted(text: str) -> str:
     return text
 
 
+def _strip_strings(text: str) -> str:
+    """Rimuove solo i letterali stringa: gli identificatori quotati restano.
+
+    Serve ai check strutturali: `FROM "tabella"` è un identificatore (va
+    visto), `'_data'` in una WHERE è una stringa (non deve contare come
+    riferimento alla tabella).
+    """
+    return re.sub(r"'([^']|'')*'", "''", text)
+
+
+def _table_sources(text: str) -> list[str]:
+    return [m.group(1).strip('"') for m in _FROM_TARGET.finditer(text)]
+
+
+def _cte_names(text: str) -> set[str]:
+    return {m.group(1).strip('"').lower() for m in _CTE_NAME.finditer(text)}
+
+
 def validate_sql(sql: str) -> str:
     """Valida una singola istruzione read-only su `_data` (SELECT o CTE).
 
     Restituisce la sql normalizzata. Le CTE (`WITH … SELECT`) sono ammesse.
-    Il check keyword gira su testo con stringhe/identificatori quotati
+
+    La validazione è **strutturale**, non una substring: ogni sorgente di
+    righe (`FROM`/`JOIN`) deve essere `_data` o una CTE della query, e le
+    table function di lettura (`read_*`, `*_scan`, `glob`, …) sono vietate.
+    I check keyword girano su testo con stringhe/identificatori quotati
     rimossi: `"export"` è una colonna, `COPY` a statement-level resta
     bloccato.
+
+    Resta un guardrail, non un sandbox: il limite è dichiarato nel README.
     """
     text = (sql or "").strip()
     if not text:
@@ -272,15 +316,39 @@ def validate_sql(sql: str) -> str:
     text = text.rstrip(";").strip()
     if not re.match(r"(?is)^\s*(SELECT|WITH)\b", text):
         raise GcsResolveError("Ammesse solo query SELECT (o WITH…SELECT). " + _SQL_RULES)
-    if "_data" not in text:
-        raise GcsResolveError(
-            "La query deve referenziare la tabella `_data` "
-            "(es. SELECT count(*) FROM _data). " + _SQL_RULES
-        )
+
     match = _FORBIDDEN_SQL.search(_strip_quoted(text))
     if match:
         raise GcsResolveError(
             f"Parola chiave non permessa in modalità read-only: {match.group(1)}. "
             + _SQL_RULES
+        )
+
+    for fn in _TABLE_FUNCTION.finditer(_strip_quoted(text)):
+        name = fn.group(1)
+        if name.lower() not in _ALLOWED_TABLE_FUNCTIONS:
+            raise GcsResolveError(
+                f"Funzione non permessa in modalità read-only: {name} "
+                "(l'unica sorgente è `_data`). " + _SQL_RULES
+            )
+
+    structural = _strip_strings(text)
+    sources = _table_sources(structural)
+    if not sources:
+        raise GcsResolveError(
+            "La query deve referenziare la tabella `_data` "
+            "(es. SELECT count(*) FROM _data). " + _SQL_RULES
+        )
+    ctes = _cte_names(structural)
+    allowed_sources = ctes | _ALLOWED_TABLE_FUNCTIONS | {_SOURCE_TABLE}
+    unknown = [s for s in sources if s.lower() not in allowed_sources]
+    if unknown:
+        raise GcsResolveError(
+            f"Sorgente non permessa: '{unknown[0]}'. L'unica sorgente è `_data` "
+            "(o una CTE che la legge). " + _SQL_RULES
+        )
+    if _SOURCE_TABLE not in {s.lower() for s in sources}:
+        raise GcsResolveError(
+            "La query deve leggere `_data` (es. SELECT count(*) FROM _data). " + _SQL_RULES
         )
     return text

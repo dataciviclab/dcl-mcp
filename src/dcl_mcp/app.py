@@ -10,9 +10,25 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from lab_connectors.http import HttpClient
 from lab_connectors.mcp import create_mcp_server
 
 SERVER_NAME = "dataciviclab"
+# Organizzazione GitHub del Lab: hub delle Discussions e perimetro della
+# ricerca org-wide di `find(include_github=True)`.
+DCL_ORG = "dataciviclab"
+
+# Ordine di fallback per il token GitHub — unica regola per context e
+# discussions (prima `find` guardava solo GITHUB_TOKEN e i tool github_*
+# accettavano anche GITHUB_PERSONAL_ACCESS_TOKEN/GH_TOKEN).
+GITHUB_TOKEN_ENV_VARS = ("GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+GITHUB_TOKEN_MISSING = (
+    "Nessun token GitHub: imposta GITHUB_TOKEN "
+    "(o GITHUB_PERSONAL_ACCESS_TOKEN/GH_TOKEN)"
+)
+
+# Client HTTP condiviso da context e discussions: una sola sessione/pool.
+_http: HttpClient | None = None
 
 mcp = create_mcp_server(
     name=SERVER_NAME,
@@ -93,3 +109,20 @@ def get_env(name: str) -> str | None:
     """Legge una env var, caricando i .env candidati la prima volta."""
     load_env()
     return os.environ.get(name) or None
+
+
+def get_http() -> HttpClient:
+    """Client HTTP condiviso del server (timeout 20s, retry/backoff inclusi)."""
+    global _http
+    if _http is None:
+        _http = HttpClient(timeout=20)
+    return _http
+
+
+def github_token() -> str | None:
+    """Token GitHub dall'ambiente (o dal `.env`), o None se assente."""
+    for var in GITHUB_TOKEN_ENV_VARS:
+        value = get_env(var)
+        if value and value.strip():
+            return value.strip()
+    return None
