@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dcl_mcp.app import SERVER_NAME, mcp
+from dcl_mcp.app import DCL_ORG, SERVER_NAME, mcp
 from dcl_mcp.discussions.client import (
     add_discussion_comment,
     create_discussion,
@@ -19,7 +19,7 @@ from dcl_mcp.discussions.client import (
 )
 from dcl_mcp.guards import guard_ok
 
-HUB_REPO = "dataciviclab/dataciviclab"
+HUB_REPO = f"{DCL_ORG}/{DCL_ORG}"
 
 
 @mcp.tool(

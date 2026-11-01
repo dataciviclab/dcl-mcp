@@ -4,15 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dcl-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP server del DataCivicLab — contesto org-wide, GitHub Discussions e query sui dati pubblici (GCS)."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
     "lab-connectors[mcp,duckdb] @ git+https://github.com/dataciviclab/lab-connectors.git",
-    "httpx>=0.28,<1",
-    "python-dotenv>=1,<2",
 ]
 
 [project.optional-dependencies]

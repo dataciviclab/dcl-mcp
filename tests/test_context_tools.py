@@ -25,11 +25,12 @@ def _patch_fetch(fake: FakeHttpClient, path: str, text: str = "", status: int = 
 
 
 def _use_fake(fake: FakeHttpClient) -> None:
-    ctx_fetch._http = fake
+    # Client HTTP condiviso (app): context e discussions usano lo stesso.
+    app._http = fake
 
 
 def _clear_fake() -> None:
-    ctx_fetch._http = None
+    app._http = None
     ctx_fetch.artifact_cache.clear()
 
 
@@ -97,6 +98,25 @@ def test_fetch_http_errors_return_error_dict():
     assert "error" in context_tools.workspace_triage()
 
 
+@pytest.mark.regression
+def test_fetch_does_not_cache_http_error_body():
+    """Un 404 non è un artefatto: il corpo d'errore non entra in cache."""
+    fake = FakeHttpClient()
+    url = f"{ctx_fetch.RAW_BASE}/session_bootstrap.md"
+    # Come il client reale: response presente, nessuna eccezione.
+    fake.responses[url] = HttpResult(
+        response=fake_response(404, text="404: Not Found"), err=None
+    )
+    ctx_fetch.artifact_cache.invalidate("session_bootstrap.md")
+    _use_fake(fake)
+
+    result = context_tools.session_bootstrap()
+
+    assert "error" in result
+    assert "404" in result["message"] or "404" in str(result["error"])
+    assert ctx_fetch.artifact_cache.get("session_bootstrap.md") is None
+
+
 # ── lab_map / find / explore ──────────────────────────────────────────────────
 
 
@@ -120,6 +140,23 @@ def test_lab_map_domain_filter():
     _use_fake(fake)
     content = context_tools.lab_map(domain="territorio-ambiente")["content"]
     assert [d["slug"] for d in content["domains"]] == ["territorio-ambiente"]
+
+
+@pytest.mark.regression
+def test_find_invalid_type_is_honest():
+    """type= sconosciuto: ok:false coi tipi validi, non zero risultati silenziosi."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    _use_fake(fake)
+
+    result = context_tools.find(query="appalti", type="mart")
+
+    assert result["ok"] is False
+    assert "mart" in result["error"]
+    assert "dataset" in result["valid_types"]
+
+    # Gli alias storici continuano a funzionare.
+    assert context_tools.find(query="appalti", type="datasets")["content"]["ok"] is True
 
 
 @pytest.mark.contract
@@ -149,6 +186,20 @@ def test_find_ranks_dataset_with_parents():
     assert top["type"] == "dataset"
     assert top["parent_repo"] == "rifiuti-urbani"
     assert top["parent_domain"] == "territorio-ambiente"
+
+
+@pytest.mark.regression
+def test_find_total_catalog_is_not_capped_by_limit():
+    """`total_catalog` era len(results), quindi al massimo `limit`."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    _use_fake(fake)
+
+    content = context_tools.find(query="rifiuti", limit=1)["content"]
+
+    assert content["returned"] == 1
+    assert content["total_catalog"] > content["returned"]
+    assert content["total"] == content["total_catalog"]
 
 
 @pytest.mark.contract
@@ -208,6 +259,7 @@ def test_explore_mart_uses_registry_columns_when_present(monkeypatch):
         lambda topic, slug, layer="clean": {
             "read_paths": ["gs://dataciviclab-mart/x.parquet"],
             "gs_path": "gs://dataciviclab-mart/rifiuti/mart_comuni.parquet",
+            "name": "Mart Comuni",
         },
     )
     content = context_tools.explore(ref="ispra_ru_base__mart_comuni")["content"]
@@ -215,8 +267,15 @@ def test_explore_mart_uses_registry_columns_when_present(monkeypatch):
     assert content["type"] == "mart"
     assert [c["name"] for c in content["columns"]] == ["anno"]
     assert content["primary_key"] == ["anno"]
-    assert content["gs_path"] == "gs://dataciviclab-mart/rifiuti/mart_comuni.parquet"
+    assert content["gcs_path"] == "gs://dataciviclab-mart/rifiuti/mart_comuni.parquet"
+    # Il nome è quello del mart, non del dataset padre.
+    assert content["name"] == "Mart Comuni"
+    # Un solo nome per il path: `gs_path` non esiste più nella card.
+    assert "gs_path" not in content
     assert 'layer="mart"' in content["query_hint"]
+    # La card è del mart: niente campi del clean parent.
+    assert "clean_rows" not in content and "clean_rows_note" not in content
+    assert "marts" not in content
 
 
 @pytest.mark.contract
@@ -234,6 +293,7 @@ def test_explore_mart_describes_parquet_when_registry_empty(monkeypatch):
         lambda topic, slug, layer="clean": {
             "read_paths": ["gs://dataciviclab-mart/x.parquet"],
             "gs_path": "gs://dataciviclab-mart/eurostat/x/mart_expenditure.parquet",
+            "name": "Mart Expenditure",
         },
     )
     monkeypatch.setattr(
@@ -246,7 +306,8 @@ def test_explore_mart_describes_parquet_when_registry_empty(monkeypatch):
     assert [c["name"] for c in content["columns"]] == ["pil", "export"]
     assert "note" not in content
     # gcs_path e query_hint devono puntare al mart, non al clean parent
-    assert content["gs_path"] == "gs://dataciviclab-mart/eurostat/x/mart_expenditure.parquet"
+    assert content["gcs_path"] == "gs://dataciviclab-mart/eurostat/x/mart_expenditure.parquet"
+    assert "gs_path" not in content
     assert 'layer="mart"' in content["query_hint"]
 
 
@@ -265,7 +326,7 @@ def test_explore_mart_without_schema_drops_parent_columns(monkeypatch):
 
     assert content["type"] == "mart"
     assert "columns" not in content
-    assert "gs_path" not in content
+    assert "gcs_path" not in content
     assert "query_hint" not in content
     assert "SELECT * FROM _data LIMIT 1" in content["note"]
 
@@ -371,7 +432,9 @@ def test_find_include_github_merges_discussions(monkeypatch):
         seen.update(variables)
         return fake_graphql(query, variables)
 
-    monkeypatch.setattr(context_tools, "discussions_graphql", fake_graphql_capture)
+    monkeypatch.setattr(
+        "dcl_mcp.discussions.client._graphql", fake_graphql_capture
+    )
     monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
     monkeypatch.setattr(app, "_ENV_LOADED", True)
 
@@ -382,6 +445,40 @@ def test_find_include_github_merges_discussions(monkeypatch):
     assert content["discussions"][0]["repo"] == "dataciviclab/rifiuti-urbani"
     # Discussion search di default solo aperte
     assert "is:open" in seen["query"]
+
+
+@pytest.mark.regression
+def test_find_include_github_accepts_personal_access_token(monkeypatch):
+    """Regression: find leggeva solo GITHUB_TOKEN mentre github_* ne accettava 3."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    fake.responses["https://api.github.com/search/issues"] = HttpResult(
+        response=fake_response(200, json_data={"items": []}), err=None
+    )
+    _use_fake(fake)
+    monkeypatch.setattr(app, "_ENV_LOADED", True)
+    for var in app.GITHUB_TOKEN_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "pat-token")
+
+    # La GraphQL passa dallo stesso FakeHttpClient: verifichiamo davvero
+    # quale token è finito nell'header, non solo che la funzione sia chiamata.
+    fake.responses["https://api.github.com/graphql"] = HttpResult(
+        response=fake_response(
+            200, json_data={"data": {"search": {"discussionCount": 0, "nodes": []}}}
+        ),
+        err=None,
+    )
+
+    content = context_tools.find(query="rifiuti", include_github=True)["content"]
+
+    assert content["github_ok"] is True
+    assert "github_errors" not in content
+    graphql_calls = [
+        call for call in fake.requests if call[1] == "https://api.github.com/graphql"
+    ]
+    assert graphql_calls, "la ricerca discussioni non è partita"
+    assert graphql_calls[0][2]["headers"]["Authorization"] == "Bearer pat-token"
 
 
 @pytest.mark.adapter
@@ -399,7 +496,7 @@ def test_find_include_github_reports_auth_failure(monkeypatch):
     def raising_graphql(query, variables):
         raise RuntimeError("GitHub GraphQL HTTP 401: Bad credentials")
 
-    monkeypatch.setattr(context_tools, "discussions_graphql", raising_graphql)
+    monkeypatch.setattr("dcl_mcp.discussions.client._graphql", raising_graphql)
 
     content = context_tools.find(query="rifiuti", include_github=True)["content"]
 
@@ -460,7 +557,7 @@ def test_search_github_discussions_without_token(monkeypatch):
     monkeypatch.setattr(app, "_ENV_LOADED", True)
     items, error = context_tools._search_github_discussions("x", None)
     assert items == []
-    assert error == "GITHUB_TOKEN non impostato"
+    assert error == context_tools.GITHUB_TOKEN_MISSING
 
 
 # ── artifact TTL cache ────────────────────────────────────────────────────────

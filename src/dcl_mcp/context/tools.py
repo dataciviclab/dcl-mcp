@@ -11,10 +11,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from dcl_mcp.app import get_env, mcp
+from dcl_mcp.app import GITHUB_TOKEN_MISSING, get_http, github_token, mcp
 from dcl_mcp.context import fetch as ctx_fetch
-from dcl_mcp.context.search import explore_ref, lab_map_summary, search_index
-from dcl_mcp.discussions.client import _graphql as discussions_graphql
+from dcl_mcp.context.search import (
+    ENTITY_TYPES,
+    explore_ref,
+    lab_map_summary,
+    normalize_entity_type,
+    search_index,
+)
+from dcl_mcp.discussions.client import search_org_discussions
 from dcl_mcp.guards import guard_ok
 
 
@@ -130,7 +136,9 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
         "across slug, name, tags, description, source_id and column schema "
         "(names/descriptions/semantic types). "
         "Filters: type= (dataset|repo|domain|source|analysis), domain=, limit=. "
-        "Returns type + parent pointers + score. Use explore(ref) for details. "
+        "Returns type + parent pointers + score; total_catalog is the number "
+        "of matches in the catalog, returned is how many you actually see "
+        "(<= limit). Use explore(ref) for details. "
         "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs whose "
         "title contains all query tokens, and top open Discussions of the org "
         "on the same query."
@@ -145,16 +153,31 @@ def find(
     include_github: bool = False,
 ) -> dict[str, object]:
     def _exec() -> dict[str, object]:
+        # Un type= sconosciuto restituiva ok:true con zero risultati: sembrava
+        # "non esiste niente" invece di "filtro sbagliato" (lab_map(domain=)
+        # era già onesto).
+        if type is not None and normalize_entity_type(type) is None:
+            return {
+                "ok": False,
+                "error": f"Tipo '{type}' non valido. Tipi: {list(ENTITY_TYPES)}",
+                "valid_types": list(ENTITY_TYPES),
+            }
         data = ctx_fetch.load_topic_index()
-        results = search_index(data, query, entity_type=type, domain=domain, limit=limit)
+        # Tutti i match prima del taglio: `total_catalog` deve essere un
+        # totale, non `len(results)` (era al massimo `limit`).
+        matched = search_index(data, query, entity_type=type, domain=domain, limit=None)
+        results = matched[: max(limit, 1)]
         payload: dict[str, Any] = {
             "query": query,
-            "total_catalog": len(results),
+            "total_catalog": len(matched),
+            "returned": len(results),
             "results": results,
             "ok": True,
         }
         if include_github:
-            token = get_env("GITHUB_TOKEN")
+            # Stessa risoluzione del token dei tool github_* (3 env var, .env
+            # lazy): prima qui si guardava solo GITHUB_TOKEN.
+            token = github_token()
             issues, issues_err = _search_github_issues(query, token, limit)
             discussions, discussions_err = _search_github_discussions(
                 query, token, min(limit, 5)
@@ -221,15 +244,25 @@ def explore(ref: str) -> dict[str, object]:
                     "Schema del mart non disponibile — "
                     "apri con SELECT * FROM _data LIMIT 1 (gcs_query)."
                 )
+            # La card è del mart: via i campi che descrivono il clean parent
+            # (righe dello snapshot, lista dei mart fratelli) — restavano
+            # accanto a quelli del mart e si contraddicevano.
+            for stale in ("clean_rows", "clean_rows_note", "marts"):
+                content.pop(stale, None)
             if resolved is not None:
-                content["gs_path"] = resolved["gs_path"]
+                # Un solo nome per il path (`gcs_path`, come la card dataset)
+                # e un solo hint, coerente col layer.
+                content["gcs_path"] = resolved["gs_path"]
+                # Il nome è quello del mart: senza, i tre mart dello stesso
+                # dataset mostravano tutti il nome del dataset padre.
+                content["name"] = resolved["name"]
                 content["query_hint"] = (
                     f'gcs_query(slug="{slug}", layer="mart", '
                     'sql="SELECT count(*) AS n FROM _data")'
                 )
             else:
-                # Il gcs_path/query_hint ereditati dal clean sono sbagliati per un mart
-                content.pop("gs_path", None)
+                # gcs_path/query_hint ereditati dal clean sarebbero sbagliati
+                content.pop("gcs_path", None)
                 content.pop("query_hint", None)
         return {"content": content, "ok": True}
 
@@ -248,13 +281,9 @@ def _search_github_issues(
     fallimento GitHub non deve sembrare "nessun risultato".
     """
     if not token:
-        return [], "GITHUB_TOKEN non impostato"
+        return [], GITHUB_TOKEN_MISSING
     url = "https://api.github.com/search/issues"
-    headers = (
-        {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
-        if token
-        else {}
-    )
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
     # Default: solo issue/PR aperte — le chiuse sporcano il segnale per un
     # newcomer (friction audit giro 2: "15 item misti, issue chiuse").
     params = {
@@ -263,9 +292,8 @@ def _search_github_issues(
         "order": "desc",
         "per_page": min(limit, 50),
     }
-    client = ctx_fetch.get_http()
     try:
-        result = client.get(url, params=params, headers=headers)
+        result = get_http().get(url, params=params, headers=headers)
     except Exception as exc:
         return [], f"GitHub REST search: {exc}"
     if not result.is_ok or result.response is None:
@@ -296,67 +324,19 @@ def _search_github_issues(
     ], None
 
 
-_DISCUSSIONS_SEARCH_QUERY = """
-query($query:String!, $limit:Int!) {
-  search(query:$query, type:DISCUSSION, first:$limit) {
-    discussionCount
-    nodes {
-      ... on Discussion {
-        number
-        title
-        url
-        updatedAt
-        answerChosenAt
-        closed
-        category { name }
-        repository { nameWithOwner }
-      }
-    }
-  }
-}
-"""
-
-
 def _search_github_discussions(
     query: str, token: str | None, limit: int = 5
 ) -> tuple[list[dict[str, object]], str | None]:
     """Top discussioni org-wide sulla query (GraphQL, richiede token).
 
     Le discussioni non esistono nella REST search/issues — vanno cercate
-    via GraphQL type:DISCUSSION, altrimenti ``find(include_github=True)``
-    restituisce zero discussioni.
+    via GraphQL type:DISCUSSION. La query vive in ``discussions.client``
+    (una sola copia, condivisa con ``github_list_discussions``).
     """
     if not token:
-        return [], "GITHUB_TOKEN non impostato"
+        return [], GITHUB_TOKEN_MISSING
     try:
-        data = discussions_graphql(
-            _DISCUSSIONS_SEARCH_QUERY,
-            {
-                # is:open: le discussioni chiuse sporcano il segnale per un
-                # newcomer (stessa policy di _search_github_issues).
-                "query": f"org:dataciviclab {query.strip()} is:open",
-                "limit": max(1, min(limit, 10)),
-            },
-        )
+        results = search_org_discussions(query, limit)
     except Exception as exc:
         return [], f"GitHub GraphQL discussions: {exc}"
-    nodes = (data.get("search") or {}).get("nodes") or []
-    results: list[dict[str, object]] = []
-    for node in nodes:
-        if not isinstance(node, dict) or not node.get("number"):
-            continue
-        category = node.get("category") or {}
-        repo = node.get("repository") or {}
-        results.append(
-            {
-                "repo": repo.get("nameWithOwner") or "",
-                "number": node.get("number"),
-                "title": node.get("title", ""),
-                "url": node.get("url", ""),
-                "category": category.get("name"),
-                "updated_at": node.get("updatedAt"),
-                "closed": bool(node.get("closed")),
-                "type": "discussion",
-            }
-        )
-    return results, None
+    return [dict(item, type="discussion") for item in results], None

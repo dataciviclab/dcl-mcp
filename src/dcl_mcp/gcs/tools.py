@@ -29,12 +29,11 @@ def _json_safe(value: Any) -> Any:
 
 
 def _run_query(read_paths: list[str], sql: str, limit: int) -> tuple[list[str], list[list[Any]]]:
-    """Esegue la SELECT dell'utente su una view `_data` del parquet. Restituisce (columns, rows)."""
-    if "_data" not in sql:
-        raise GcsResolveError(
-            "La query deve referenziare la tabella `_data` "
-            "(es. SELECT * FROM _data LIMIT 10)."
-        )
+    """Esegue la SELECT dell'utente su una view `_data` del parquet. Restituisce (columns, rows).
+
+    La query arriva già validata da ``validate_sql`` (unica sorgente `_data`):
+    qui resta solo il binding su DuckDB.
+    """
     path_list = ", ".join(f"'{p}'" for p in read_paths)
     create_view = (
         f"CREATE OR REPLACE TEMP VIEW _data AS SELECT * FROM read_parquet([{path_list}])"
@@ -79,13 +78,25 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
             query = validate_sql(sql)
             # Leggi una riga in più del limite richiesto: serve a distinguere
             # "esattamente `limit` righe" (non troncato) da "ce n'erano altre".
-            columns, rows = _run_query(resolved["read_paths"], query, safe_limit + 1)
+            try:
+                columns, rows = _run_query(resolved["read_paths"], query, safe_limit + 1)
+            except GcsResolveError:
+                raise
+            except Exception as exc:
+                # Errore di binding/execution DuckDB: dillo come errore della
+                # query, non come guasto del tool.
+                raise GcsResolveError(
+                    f"Query fallita: {exc}. Controlla le colonne con "
+                    "SELECT * FROM _data LIMIT 1."
+                ) from exc
             truncated = len(rows) > safe_limit
             rows = rows[:safe_limit]
             payload: dict[str, Any] = {
                 "slug": resolved["slug"],
                 "layer": resolved["layer"],
-                "gs_path": resolved["gs_path"],
+                # Stesso nome della card `explore` (era `gs_path` qui e
+                # `gcs_path` là: due nomi per lo stesso dato).
+                "gcs_path": resolved["gs_path"],
                 "columns": columns,
                 "n_rows": len(rows),
                 "limit": safe_limit,

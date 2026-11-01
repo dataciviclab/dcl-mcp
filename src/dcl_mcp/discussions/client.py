@@ -1,7 +1,11 @@
 """Client GraphQL per GitHub Discussions.
 
 Fornisce funzioni pubbliche per list, search, get, create discussion e commenti.
-Usa httpx per chiamate autenticate all'API GitHub GraphQL.
+
+Il trasporto HTTP è quello condiviso del Lab (``lab_connectors.http``): un
+solo client, un solo set di regole per il token. Prima qui c'era un client
+``httpx`` dedicato con la sua risoluzione del token, diversa da quella di
+``find(include_github=True)``.
 
 Migrato da ``lab-connectors/mcp_servers/github-discussions/`` con la
 creazione di dcl-mcp (il MCP di dominio non è un connector infrastrutturale).
@@ -9,20 +13,11 @@ creazione di dcl-mcp (il MCP di dominio non è un connector infrastrutturale).
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-import httpx
+from dcl_mcp.app import DCL_ORG, GITHUB_TOKEN_MISSING, get_http, github_token
 
 API_URL = "https://api.github.com/graphql"
-TIMEOUT_SECONDS = 20
-
-# Ordine di fallback per il token GitHub — allineato a _local/mcp/github/server.sh
-_GITHUB_TOKEN_ENV_VARS = [
-    "GITHUB_PERSONAL_ACCESS_TOKEN",
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-]
 
 
 class GitHubDiscussionsClientError(RuntimeError):
@@ -30,14 +25,10 @@ class GitHubDiscussionsClientError(RuntimeError):
 
 
 def _get_token() -> str:
-    for var in _GITHUB_TOKEN_ENV_VARS:
-        token = os.environ.get(var, "").strip()
-        if token:
-            return token
-    raise GitHubDiscussionsClientError(
-        "Nessun token GitHub trovato nell'env del server MCP. "
-        f"Cercati: {', '.join(_GITHUB_TOKEN_ENV_VARS)}."
-    )
+    token = github_token()
+    if not token:
+        raise GitHubDiscussionsClientError(GITHUB_TOKEN_MISSING)
+    return token
 
 
 def _split_repo(repo_full_name: str) -> tuple[str, str]:
@@ -48,28 +39,17 @@ def _split_repo(repo_full_name: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(
-        timeout=TIMEOUT_SECONDS,
-        headers={
-            "Authorization": f"Bearer {_get_token()}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "DataCivicLab GitHub Discussions MCP",
-        },
-    )
-
-
 def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     payload = {"query": query, "variables": variables}
-    try:
-        with _client() as client:
-            resp = client.post(API_URL, json=payload)
-    except httpx.TimeoutException as exc:
-        raise GitHubDiscussionsClientError(
-            "Timeout durante chiamata GraphQL GitHub Discussions"
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise GitHubDiscussionsClientError(f"Errore HTTP verso GitHub GraphQL: {exc}") from exc
+    headers = {
+        "Authorization": f"Bearer {_get_token()}",
+        "Accept": "application/vnd.github+json",
+    }
+    result = get_http().post(API_URL, json=payload, headers=headers)
+    resp = result.response
+    if resp is None:
+        # Timeout/connessione: HttpClient non solleva, mette l'errore in `err`.
+        raise GitHubDiscussionsClientError(f"Errore HTTP verso GitHub GraphQL: {result.err}")
 
     try:
         data = resp.json()
@@ -109,6 +89,7 @@ def _discussion_node_to_summary(node: dict[str, Any]) -> dict[str, Any]:
     category = node.get("category") or {}
     labels = ((node.get("labels") or {}).get("nodes")) or []
     return {
+        "repo": ((node.get("repository") or {}).get("nameWithOwner")) or "",
         "number": node.get("number"),
         "title": node.get("title"),
         "url": node.get("url"),
@@ -250,6 +231,7 @@ query($query:String!, $limit:Int!, $after:String) {
         category { name }
         author { login }
         labels(first:10) { nodes { name color } }
+        repository { nameWithOwner }
       }
     }
   }
@@ -277,6 +259,22 @@ def _search_nodes(
     results = [_discussion_node_to_summary(n) for n in nodes if isinstance(n, dict)]
     page = payload.get("pageInfo") or {}
     return payload.get("discussionCount") or len(results), results, page
+
+
+def search_org_discussions(
+    query: str, limit: int = 5, org: str = DCL_ORG
+) -> list[dict[str, Any]]:
+    """Top discussioni aperte dell'org sulla query (org-wide, non per repo).
+
+    Stessa ``_SEARCH_DISCUSSIONS_QUERY`` di ``list_discussions(mode="search")``:
+    prima ``find(include_github=True)`` aveva una copia ridotta della query,
+    da tenere allineata a mano.
+    """
+    if not query.strip():
+        return []
+    text = f"org:{org} {query.strip()} is:open"
+    _count, results, _page = _search_nodes(text, max(1, min(limit, 10)))
+    return results
 
 
 def list_discussions(
@@ -342,6 +340,7 @@ def list_discussions(
                 category { name }
                 author { login }
                 labels(first:10) { nodes { name color } }
+                repository { nameWithOwner }
               }
             }
           }
@@ -366,6 +365,7 @@ def list_discussions(
                 category { name }
                 author { login }
                 labels(first:10) { nodes { name color } }
+                repository { nameWithOwner }
               }
             }
           }

@@ -15,6 +15,7 @@ usano httpfs (l'HTTP generico non supporta i glob).
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -229,58 +230,128 @@ def resolve(
 
 # ── SQL guardrail ──────────────────────────────────────────────────────────────
 
-# Parole chiave che non appartengono a una query read-only. Word-boundary per
-# non falsare positivi su colonne che contengono la sottostringa.
-_FORBIDDEN_SQL = re.compile(
-    r"\b(COPY|ATTACH|DETACH|INSTALL|LOAD|PRAGMA|CREATE|INSERT|UPDATE|DELETE|DROP|"
-    r"EXPORT|IMPORT|CALL|SET|RESET|CHECKPOINT|FORCE)\b",
-    re.IGNORECASE,
-)
-
 _SQL_RULES = (
     "Regole: una sola istruzione (no ';'), SELECT o WITH…SELECT su `_data`, "
     "niente COPY/INSERT/UPDATE/DELETE/PRAGMA e simili."
 )
 
+_SOURCE_TABLE = "_data"
+# Table function che generano righe in memoria: le uniche ammesse in FROM.
+# `range`/`generate_series` servono alle spine temporali delle analisi.
+_ALLOWED_TABLE_FUNCTIONS = frozenset({"unnest", "range", "generate_series"})
+# Famiglie di funzioni che leggono filesystem o database esterni, ovunque
+# compaiano nella query (in FROM o come scalari in WHERE).
+_DANGEROUS_FUNCTION = re.compile(
+    r"(?i)^(read_[a-z0-9_]+|parquet_[a-z0-9_]+|[a-z0-9_]+_(scan|query|attach)"
+    r"|glob|sniff_csv|st_read)$"
+)
+# Messaggio con cui DuckDB rifiuta tutto ciò che non è una SELECT.
+_SELECT_ONLY = "Only SELECT statements can be serialized to json!"
 
-def _strip_quoted(text: str) -> str:
-    """Rimuove stringhe e identificatori quotati prima del check keyword.
 
-    Le colonne legittime non devono triggerare la guardia: il mart
-    eurostat ha una colonna `export`, quotata in DuckDB come "export"
-    (audit giro 4: falso positivo che rendeva la colonna inqueryabile).
+def _parse_sql(sql: str) -> dict[str, Any]:
+    """AST della query via DuckDB (``json_serialize_sql``), zero regex.
+
+    Il serializzatore rifiuta da sé ogni istruzione che non sia una SELECT:
+    è il controllo più solido disponibile senza un parser nostro.
     """
-    text = re.sub(r"'([^']|'')*'", "''", text)
-    text = re.sub(r'"[^"]*"', '""', text)
-    text = re.sub(r"`[^`]*`", "``", text)
-    return text
+    import duckdb
+
+    with duckdb.connect() as con:
+        row = con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()
+    if row is None:
+        raise GcsResolveError("SQL non valida: il parser non ha risposto. " + _SQL_RULES)
+    return json.loads(row[0])
+
+
+def _scan_ast(node: Any, out: dict[str, Any]) -> None:
+    """Raccoglie sorgenti, funzioni e CTE dall'AST (walk generico)."""
+    if isinstance(node, dict):
+        node_type = node.get("type")
+        if node_type == "BASE_TABLE":
+            out["tables"].append(str(node.get("table_name") or ""))
+        if node_type == "TABLE_FUNCTION":
+            function = node.get("function") or {}
+            out["table_functions"].append(str(function.get("function_name") or ""))
+        elif node.get("class") == "FUNCTION":
+            out["functions"].append(str(node.get("function_name") or ""))
+        cte_map = node.get("cte_map")
+        if isinstance(cte_map, dict):
+            for entry in cte_map.get("map") or []:
+                if isinstance(entry, dict) and entry.get("key"):
+                    out["ctes"].add(str(entry["key"]).lower())
+        for value in node.values():
+            _scan_ast(value, out)
+    elif isinstance(node, list):
+        for value in node:
+            _scan_ast(value, out)
 
 
 def validate_sql(sql: str) -> str:
-    """Valida una singola istruzione read-only su `_data` (SELECT o CTE).
+    """Valida una singola SELECT read-only su `_data`, sull'AST di DuckDB.
 
-    Restituisce la sql normalizzata. Le CTE (`WITH … SELECT`) sono ammesse.
-    Il check keyword gira su testo con stringhe/identificatori quotati
-    rimossi: `"export"` è una colonna, `COPY` a statement-level resta
-    bloccato.
+    Regole, tutte strutturali (nessuna euristica su stringhe):
+      - una sola istruzione, e deve essere una SELECT (o WITH…SELECT);
+      - ogni sorgente di righe (`BASE_TABLE`) è `_data` o una CTE della query;
+      - le table function in FROM sono solo quelle in memoria
+        (`unnest`/`range`/`generate_series`);
+      - nessuna funzione di lettura (`read_*`, `*_scan`, `glob`, …) ovunque.
+
+    Prima il check era una substring su `_data` e poi un regex sulle
+    sorgenti: `SELECT * FROM '/tmp/seg.csv'` è sintassi DuckDB valida e
+    passava (la tabella era una stringa, invisibile al regex).
+
+    Resta un guardrail, non un sandbox: il limite è dichiarato nel README.
     """
     text = (sql or "").strip()
+    # Il ';' finale è tollerato, ma va tolto: la query viene incapsulata in
+    # una subquery (`SELECT * FROM (…) AS _inner`).
+    text = text.rstrip(";").strip()
     if not text:
         raise GcsResolveError("SQL vuota. " + _SQL_RULES)
-    if ";" in text.rstrip(";"):
+
+    parsed = _parse_sql(text)
+    if parsed.get("error"):
+        message = str(parsed.get("error_message") or "errore di parsing")
+        if message == _SELECT_ONLY:
+            raise GcsResolveError("Ammesse solo query SELECT (o WITH…SELECT). " + _SQL_RULES)
+        raise GcsResolveError(f"SQL non valida: {message}. " + _SQL_RULES)
+
+    statements = parsed.get("statements") or []
+    if len(statements) != 1:
         raise GcsResolveError("Ammessa una sola istruzione SQL (niente ';'). " + _SQL_RULES)
-    text = text.rstrip(";").strip()
-    if not re.match(r"(?is)^\s*(SELECT|WITH)\b", text):
-        raise GcsResolveError("Ammesse solo query SELECT (o WITH…SELECT). " + _SQL_RULES)
-    if "_data" not in text:
+    statement = (statements[0] or {}).get("node") or {}
+    if statement.get("type") != "SELECT_NODE":
         raise GcsResolveError(
-            "La query deve referenziare la tabella `_data` "
-            "(es. SELECT count(*) FROM _data). " + _SQL_RULES
-        )
-    match = _FORBIDDEN_SQL.search(_strip_quoted(text))
-    if match:
-        raise GcsResolveError(
-            f"Parola chiave non permessa in modalità read-only: {match.group(1)}. "
+            f"Ammesse solo query SELECT (o WITH…SELECT), non {statement.get('type')}. "
             + _SQL_RULES
+        )
+
+    scan: dict[str, Any] = {"tables": [], "table_functions": [], "functions": [], "ctes": set()}
+    _scan_ast(parsed, scan)
+
+    for name in scan["table_functions"]:
+        if name.lower() not in _ALLOWED_TABLE_FUNCTIONS:
+            raise GcsResolveError(
+                f"Funzione non permessa in modalità read-only: {name} "
+                "(l'unica sorgente è `_data`). " + _SQL_RULES
+            )
+    for name in scan["functions"]:
+        if _DANGEROUS_FUNCTION.match(name):
+            raise GcsResolveError(
+                f"Funzione non permessa in modalità read-only: {name} "
+                "(legge file o database esterni). " + _SQL_RULES
+            )
+
+    allowed = scan["ctes"] | {_SOURCE_TABLE}
+    unknown = [table for table in scan["tables"] if table.lower() not in allowed]
+    if unknown:
+        raise GcsResolveError(
+            f"Sorgente non permessa: '{unknown[0]}'. L'unica sorgente è `_data` "
+            "(o una CTE che la legge). " + _SQL_RULES
+        )
+    if not any(table.lower() == _SOURCE_TABLE for table in scan["tables"]):
+        raise GcsResolveError(
+            "La query deve leggere `_data` (es. SELECT count(*) FROM _data). " + _SQL_RULES
         )
     return text

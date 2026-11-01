@@ -87,6 +87,28 @@ _FIELD_TOKEN_WEIGHTS = {"slug": 50, "name": 55, "text": 35, "tag": 28}
 _EXACT_WEIGHTS = {"slug": 100, "name": 80, "text": 40, "tag": 30}
 _SUBSTR_WEIGHTS = {"slug": 80, "name": 60, "text": 30, "tag": 25}
 
+# Tipi di entità ricercabili: unica fonte per search_index e per la
+# validazione di find(type=). I plurali e "theme" sono alias storici.
+ENTITY_TYPES: tuple[str, ...] = ("dataset", "repo", "domain", "source", "analysis")
+_TYPE_ALIASES = {
+    "datasets": "dataset",
+    "repos": "repo",
+    "domains": "domain",
+    "sources": "source",
+    "analyses": "analysis",
+    "theme": "domain",
+    "themes": "domain",
+}
+
+
+def normalize_entity_type(value: str | None) -> str | None:
+    """Normalizza ``type=`` in uno di ``ENTITY_TYPES`` (None se assente o ignoto)."""
+    if not value:
+        return None
+    candidate = value.strip().lower()
+    candidate = _TYPE_ALIASES.get(candidate, candidate)
+    return candidate if candidate in ENTITY_TYPES else None
+
 
 def flatten_datasets(datasets_by_source: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """Flatten topic_index ``datasets`` dict into a list of dataset entries."""
@@ -265,15 +287,19 @@ def search_index(
     query: str,
     entity_type: str | None = None,
     domain: str | None = None,
-    limit: int = 10,
+    limit: int | None = 10,
 ) -> list[dict[str, Any]]:
     """Ranked cross-entity search over a topic_index dict.
 
     entity_type: dataset | repo | domain | source | analysis | None (all)
     Returns items: {type, slug, name, parent_repo, parent_domain, score, stage?}
+
+    ``limit=None`` restituisce **tutti** i match: serve a ``find`` per
+    riportare il totale reale prima di tagliare (prima ``total_catalog``
+    era ``len(results)``, quindi al massimo ``limit``).
     """
     results: list[dict[str, Any]] = []
-    type_filter = entity_type.lower() if entity_type else None
+    type_filter = normalize_entity_type(entity_type)
     # Shared word cache for the whole query: identical field values (e.g.
     # source_id "anac" repeated across 9 datasets) tokenize once.
     word_cache: _WordCache = {}
@@ -308,7 +334,7 @@ def search_index(
             }
         )
 
-    if type_filter in (None, "dataset", "datasets"):
+    if type_filter in (None, "dataset"):
         for ds in dataset_entries:
             col_text, col_sem = _columns_index_text(ds.get("columns"))
             score = _score_entity(
@@ -346,7 +372,7 @@ def search_index(
                 }
             )
 
-    if type_filter in (None, "repo", "repos"):
+    if type_filter in (None, "repo"):
         for repo, card in (topic_index.get("repos") or {}).items():
             if not isinstance(card, dict):
                 continue
@@ -377,7 +403,7 @@ def search_index(
                 }
             )
 
-    if type_filter in (None, "domain", "domains", "theme", "themes"):
+    if type_filter in (None, "domain"):
         domains = topic_index.get("domains") or topic_index.get("explorer_themes") or []
         for dom in domains:
             if not isinstance(dom, dict):
@@ -407,7 +433,7 @@ def search_index(
                 }
             )
 
-    if type_filter in (None, "analysis", "analyses"):
+    if type_filter in (None, "analysis"):
         for a in topic_index.get("analyses") or []:
             score = _score_entity(
                 query,
@@ -445,7 +471,7 @@ def search_index(
                 }
             )
 
-    if type_filter in (None, "source", "sources"):
+    if type_filter in (None, "source"):
         source_counts: dict[str, int] = {}
         for ds in dataset_entries:
             sid = ds.get("source_id") or ""
@@ -468,6 +494,8 @@ def search_index(
             )
 
     results.sort(key=lambda r: (-r.get("score", 0), r.get("slug") or ""))
+    if limit is None:
+        return results
     return results[: max(limit, 1)]
 
 
@@ -479,10 +507,27 @@ def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> d
     by_repo = topic_index.get("by_repo") or {}
     by_slug = topic_index.get("by_slug") or {}
 
-    total_datasets = (
-        sum(len(v) for v in by_repo.values()) if by_repo else sum(len(v) for v in by_slug.values())
-    )
-    published = sum(1 for m in by_slug.values() if m.get("stage") == "published")
+    # Con domain= i totali sono quelli del dominio: prima restavano globali
+    # (1 dominio, 6 repo, ma "datasets: 468") e si contraddicevano con la
+    # vista filtrata.
+    domain_slugs = (by_domain.get(domain) or []) if domain else []
+    if domain:
+        total_datasets = len(domain_slugs)
+        published = sum(
+            1 for s in domain_slugs if (by_slug.get(s) or {}).get("stage") == "published"
+        )
+        analyses_by_dataset = topic_index.get("analyses_by_dataset") or {}
+        n_analyses = len(
+            {a for s in domain_slugs for a in (analyses_by_dataset.get(s) or [])}
+        )
+    else:
+        total_datasets = (
+            sum(len(v) for v in by_repo.values())
+            if by_repo
+            else sum(len(v) for v in by_slug.values())
+        )
+        published = sum(1 for m in by_slug.values() if m.get("stage") == "published")
+        n_analyses = len(topic_index.get("analyses") or [])
 
     domain_nodes: list[dict[str, Any]] = []
     selected = [d for d in domains if not domain or d.get("slug") == domain]
@@ -536,7 +581,7 @@ def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> d
             "domains": len(domain_nodes),
             "datasets": total_datasets,
             "published": published,
-            "analyses": len(topic_index.get("analyses") or []),
+            "analyses": n_analyses,
         },
         "ok": True,
     }
@@ -630,11 +675,10 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             )
         marts = full.get("mart_refs") or []
         if marts:
+            # Solo la lista: l'hint lo dà `explore(<mart>)`, con il layer
+            # giusto. Un `marts_hint` qui duplicava `query_hint` puntando a
+            # un'altra tabella.
             card["marts"] = marts
-            card["marts_hint"] = (
-                f'gcs_query(slug="{marts[0]}", layer="mart", '
-                'sql="SELECT count(*) AS n FROM _data")'
-            )
         columns = full.get("columns") or []
         if columns:
             card["columns"] = [
@@ -683,10 +727,6 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                         "slug": ref,
                         "dataset": ds_part,
                         "found": True,
-                        "marts_query_hint": (
-                            f'gcs_query(slug="{ref}", layer="mart", '
-                            'sql="SELECT count(*) AS n FROM _data")'
-                        ),
                     }
                 )
                 if ref not in known_marts:

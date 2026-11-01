@@ -127,6 +127,10 @@ def test_lab_map_summary_domain_filter(sample_index):
     assert len(summary["domains"]) == 1
     assert summary["domains"][0]["slug"] == "finanza-pubblica"
     assert all(r["domain"] == "finanza-pubblica" for r in summary["repos"])
+    # I totali seguono il filtro: prima restavano globali (3 dataset su 1 dominio).
+    assert summary["totals"]["datasets"] == 1
+    assert summary["totals"]["published"] == 0
+    assert summary["totals"]["analyses"] == 0
 
 
 # ── explore_ref ───────────────────────────────────────────────────────────────
@@ -144,9 +148,10 @@ def test_explore_dataset_repo_domain(sample_index):
     assert ds["year_min"] == 2010 and ds["year_max"] == 2024
     assert ds["clean_rows"] == 123456
     assert "serie completa" in ds["clean_rows_note"]
+    # Un solo hint (clean): la lista dei mart resta dato, l'hint per il
+    # mart lo dà explore(<mart_slug>) col layer giusto.
     assert ds["marts"] == ["ispra_ru_base__mart_comuni"]
-    assert 'layer="mart"' in ds["marts_hint"]
-    assert "SELECT count(*)" in ds["marts_hint"]
+    assert "marts_hint" not in ds
     assert ds["gcs_path"].startswith("gs://dataciviclab-clean/")
     assert 'slug="ispra_ru_base"' in ds["query_hint"]
     assert "SELECT count(*)" in ds["query_hint"]
@@ -199,7 +204,7 @@ def test_explore_resolves_mart_slug(sample_index):
     assert known["found"] is True
     assert known["type"] == "mart"
     assert known["dataset"] == "ispra_ru_base"
-    assert 'layer="mart"' in known["marts_query_hint"]
+    assert "marts_query_hint" not in known
     assert "note" not in known
 
     unknown = explore_ref(sample_index, "ispra_ru_base__mart_fantasma")
