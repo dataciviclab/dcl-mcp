@@ -89,11 +89,16 @@ find("rifiuti urbani")            # scopri dataset/analisi/repo
 - **GCS** è read-only: solo bucket `dataciviclab-clean` e
   `dataciviclab-mart`, una sola istruzione per chiamata (SELECT o
   WITH…SELECT, niente DML/PRAGMA), limite 500 righe (clamp dichiarato).
-  La query deve leggere la tabella `_data` (view sul parquet): la
-  validazione è strutturale, ogni sorgente di righe (`FROM`/`JOIN`) deve
-  essere `_data` o una CTE, e le table function di lettura (`read_*`,
-  `*_scan`, `glob`) sono rifiutate. È un guardrail, non un sandbox: non
-  eseguire query di terzi non fidati.
+  La query deve leggere la tabella `_data` (view sul parquet). La
+  validazione gira sull'**AST** che DuckDB produce con
+  `json_serialize_sql`: ogni sorgente di righe (`BASE_TABLE`) deve essere
+  `_data` o una CTE della query — **incluse le sorgenti scritte come
+  stringa** (`FROM '/tmp/x.csv'`, sintassi DuckDB valida che legge il
+  file) — e nessuna funzione di lettura (`read_*`, `*_scan`, `glob`, …)
+  può comparire, né in `FROM` né come scalare in `WHERE`. Le sole table
+  function ammesse sono quelle in memoria (`unnest`, `range`,
+  `generate_series`). È un guardrail, non un sandbox: non eseguire query
+  di terzi non fidati.
   Per i mart usa `layer=mart` e lo slug `dataset__table` (in `marts`
   della card, o dal registry del repo produttore).
 - **Ref tipizzati**: in caso di collisione di slug (es. repo e analysis
@@ -140,8 +145,9 @@ Cambi di contratto rispetto alla v0.3 — i **nomi dei tool** non cambiano:
 - `find(type=…)` con un tipo sconosciuto risponde `ok:false` con
   `valid_types` (prima: zero risultati silenziosi).
 - `lab_map(domain=…)` riporta `totals` del dominio, non globali.
-- `gcs_query` valida la SQL in modo strutturale (sorgenti `FROM`/`JOIN`
-  limitate a `_data`/CTE, table function di lettura rifiutate).
+- `gcs_query` valida la SQL sull'AST di DuckDB: sorgenti `FROM`/`JOIN`
+  limitate a `_data`/CTE (anche quando scritte come stringa), funzioni di
+  lettura rifiutate ovunque compaiano.
 - Un solo client HTTP (lab-connectors) e una sola risoluzione del token
   per context, `find(include_github)` e Discussions. `httpx` e
   `python-dotenv` non sono più dipendenze.

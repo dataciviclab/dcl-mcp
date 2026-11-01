@@ -175,26 +175,64 @@ def test_validate_sql_accepts_select_and_cte():
 
 
 def test_validate_sql_rejects_non_select_and_multi():
-    with pytest.raises(GcsResolveError, match="SELECT"):
-        validate_sql("UPDATE _data SET x = 1")
+    # Il serializzatore AST di DuckDB rifiuta da sé tutto ciò che non è SELECT.
+    for bad in (
+        "UPDATE _data SET x = 1",
+        "DROP TABLE _data",
+        "ATTACH 'x.db'",
+        "PRAGMA database_list",
+        "SET threads = 1",
+        "CALL foo()",
+        "COPY _data TO '/tmp/x.csv'",
+        "INSTALL httpfs",
+        "LOAD httpfs",
+        "SELECT * FROM _data; DROP TABLE _data",
+    ):
+        with pytest.raises(GcsResolveError, match="SELECT"):
+            validate_sql(bad)
+
+    # Due SELECT sono comunque due istruzioni.
     with pytest.raises(GcsResolveError, match="sola"):
-        validate_sql("SELECT * FROM _data; DROP TABLE _data")
+        validate_sql("SELECT * FROM _data; SELECT 1")
     with pytest.raises(GcsResolveError, match="vuota"):
         validate_sql("   ")
     with pytest.raises(GcsResolveError, match="_data"):
         validate_sql("SELECT 1")
 
 
-def test_validate_sql_rejects_forbidden_keywords():
-    # Il blocco è defense-in-depth dopo i guard SELECT + no-';':
-    # raggiungibile da una SELECT che contiene una parola chiave (es. colonna).
+@pytest.mark.regression
+def test_validate_sql_rejects_string_sources():
+    """`FROM '/tmp/x.csv'` è sintassi DuckDB valida e legge il file.
+
+    Il vecchio check cancellava i letterali prima di estrarre le sorgenti,
+    quindi la tabella-stringa era invisibile e bastava che `_data`
+    comparisse altrove. Trovato in review sulla PR #4.
+    """
     for bad in (
+        "SELECT * FROM _data, '/tmp/seg.csv'",
+        "WITH _data AS (SELECT * FROM '/tmp/seg.csv') SELECT * FROM _data",
+        "SELECT * FROM (SELECT * FROM _data), '/tmp/seg.csv'",
+        "SELECT * FROM '/tmp/seg.csv' WHERE 1 IN (SELECT 1 FROM _data)",
+        "SELECT * FROM '/tmp/seg.parquet'",
+    ):
+        with pytest.raises(GcsResolveError, match="Sorgente non permessa"):
+            validate_sql(bad)
+
+
+def test_validate_sql_keyword_columns_are_not_false_positives():
+    """Una colonna che si chiama come una keyword non è una minaccia."""
+    for ok in (
         "SELECT copy FROM _data",
         "SELECT * FROM _data WHERE drop = 1",
-        "SELECT attach FROM _data",
+        'SELECT "export" FROM _data',
+        "SELECT * FROM _data WHERE load IS NULL",
     ):
-        with pytest.raises(GcsResolveError, match="non permessa"):
-            validate_sql(bad)
+        assert validate_sql(ok) == ok
+
+
+def test_validate_sql_accepts_schema_qualified_data():
+    """`main._data` è la stessa view: il vecchio regex la rifiutava."""
+    assert validate_sql("SELECT * FROM main._data") == "SELECT * FROM main._data"
 
 
 def test_validate_sql_quoted_column_not_false_positive():
