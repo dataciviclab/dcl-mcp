@@ -1,157 +1,136 @@
 # dcl-mcp — il MCP del DataCivicLab
 
-Server MCP unico per partecipare all'ecosistema del Lab: contesto
-org-wide, GitHub Discussions e query read-only sui dati pubblici.
+Il modo più rapido per **consultare il Lab e partecipare alle sue discussioni**
+da un agente AI, senza clonare nessun repository.
+
+Un solo server, nome `dataciviclab`, 12 tool.
+
+## Cosa ti dà
+
+| Puoi… | Con | Cosa ottieni |
+|---|---|---|
+| capire com'è organizzato il Lab | `session_bootstrap`, `lab_map` | domini, repo, fonti, stato recente |
+| trovare un dataset o un'analisi | `find`, `explore` | slug, anni, colonne, marts, dove sta il parquet |
+| leggere i dati pubblicati | `gcs_query` | SELECT su clean e mart, read-only (max 500 righe) |
+| capire se due dataset si possono unire | `join_suggestions` | coppie di colonne, overlap anni, mismatch di tipo |
+| vedere cosa è aperto | `workspace_triage`, `find(include_github=true)` | PR, issue, discussioni del tema |
+| partecipare | `github_get_discussion`, `github_create_discussion`, `github_add_discussion_comment` | leggi, apri, commenta |
+
+## Cosa non puoi fare
+
+Il server è **read-only sui dati** e **non esegue pipeline**:
+
+- non scarica né trasforma dati → usa `toolkit`, sul repo locale
+- non modifica file nei repo né apre PR → usa il server `github`
+- non pubblica dataset né rigenera il catalogo → lo fa la CI di
+  [agent-context-builder](https://github.com/dataciviclab/agent-context-builder)
+
+## Tre percorsi
+
+### 1. Mi oriento
 
 ```
+session_bootstrap()          # cosa è successo nel Lab
+lab_map()                    # domini → repo → fonti
+find("rifiuti urbani")       # cerca dataset, analisi, repo, fonti
+explore("ispra_ru_base")     # card: anni, colonne, marts, gcs_path
+```
+
+### 2. Mi serve un numero verificabile
+
+```
+find("irpef comunale")        # trova lo slug
+explore("irpef_comunale")     # controlla colonne e periodo
+gcs_query(slug="irpef_comunale", sql="SELECT count(*) FROM _data")
+```
+
+`clean_rows` nella card è il conteggio dell'ultimo snapshot pubblicato, **non
+la serie completa**: per un numero citabile usa sempre `count(*)` via
+`gcs_query`.
+
+### 3. Voglio partecipare
+
+```
+find("appalti", include_github=true)      # cosa è già aperto
+github_get_discussion(number=123, include_comments=true)
+github_list_discussion_categories()       # prima di creare
+github_create_discussion(category_name="…", title=…, body=…)
+github_add_discussion_comment(number=123, body=…)
+```
+
+## Installazione
+
+```bash
 pip install "lab-connectors[mcp,duckdb] @ git+https://github.com/dataciviclab/lab-connectors.git"
 pip install "dcl-mcp @ git+https://github.com/dataciviclab/dcl-mcp.git"
 ```
 
-## Cosa espone
+Config OpenCode (V2):
 
-Un solo server, nome `dataciviclab` — 11 tool in tre famiglie:
-
-| Famiglia | Tool | Cosa fa |
-|---|---|---|
-| **Context** | `session_bootstrap` | Orientamento rapido (markdown) |
-| | `lab_map(domain=)` | Albero domains → repos → sources; con `domain=` i `totals` sono quelli del dominio (dominio sconosciuto → elenco domini validi) |
-| | `find(query, type=, domain=)` | Ricerca ranked cross-entity; `total_catalog` (match totali) + `returned` (quanti ne vedi) + `total_external` (+ `github_errors` se `include_github` fallisce). `type=` sconosciuto → `ok:false` coi tipi validi |
-| | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis — ref tipizzabili (`analysis:slug`, `repo:slug`, …) |
-| | `join_suggestions(slug, limit=, min_years=, include_names=)` | Dataset joinabili, derivati dai semantic_type: coppie di colonne, overlap anni, `type_mismatch`; chiavi specifiche (CIG/CUP/CF) prima delle geografiche |
-| | `workspace_triage(section=)` | Stato Lab: radar, PR, issues, discussions… |
-| **Discussions** | `github_list_discussions(query=, category_name=)` | Elenca (cursor) o cerca full-text/categoria server-side; `repo_full_name` default hub |
-| | `github_list_discussion_categories` | Categorie valide per la creazione (nome + slug) |
-| | `github_get_discussion(include_comments=)` | Legge una discussion; con `include_comments=true` aggiunge commenti e reply in una sola chiamata |
-| | `github_create_discussion` / `github_add_discussion_comment` | Partecipa (scrittura) |
-| **GCS** | `gcs_query(slug, sql, layer=, limit=)` | SELECT/CTE read-only sui parquet pubblici |
-
-### Flusso tipico (onboarding)
-
-```
-find("rifiuti urbani")            # scopri dataset/analisi/repo
-  → explore("ispra_ru_base")      # card: description, anni, colonne,
-                                  # clean_rows, marts, gcs_path, query_hint
-  → gcs_query(slug=…, sql=…)      # SELECT o WITH…SELECT su `_data`,
-                                  # layer=mart per le tabelle mart
-  → find(…, include_github=true)  # issue/PR aperte + discussioni open del tema
-  → github_get_discussion(number=…, include_comments=True)
-  → github_list_discussion_categories → github_create_discussion
-```
-
-### Routing tra MCP del Lab
-
-- **dcl-mcp** (questo) — org-wide: dove cerco, cosa è successo, come partecipo, dati pubblicati
-- **toolkit** — repo locale: pipeline, contratti, SQL su raw/clean/mart del workspace
-- **source-observatory** — scouting fonti e inventory
-- **github** (server generico) — leggere/scrivere un issue o una PR
-  specifica. `find(include_github=true)` qui è solo *scoperta* Lab-scoped:
-  cerca issue/PR aperte i cui titoli contengono i token della query, non
-  sostituisce il server generico.
-
-## Configurazione
-
-```json
+```jsonc
 {
-  "mcpServers": {
-    "dataciviclab": {
-      "command": "dcl-mcp"
+  "mcp": {
+    "servers": {
+      "dataciviclab": {
+        "type": "local",
+        "command": ["dcl-mcp"],
+        "environment": { "DCL_MCP_ENV_FILE": "/percorso/.env" }
+      }
     }
   }
 }
 ```
 
+Per altri client che usano il formato `mcpServers`, l'entry è
+`{"command": "dcl-mcp", "env": {...}}`.
+
 | Env var | Ruolo | Obbligatoria |
 |---|---|---|
-| `GITHUB_TOKEN` (o `GITHUB_PERSONAL_ACCESS_TOKEN` / `GH_TOKEN`) | Discussions e `find(include_github=true)` — GraphQL richiede auth anche in lettura. Unica regola di risoluzione, in ordine di fallback | sì, per discussions/write |
+| `GITHUB_TOKEN` (o `GITHUB_PERSONAL_ACCESS_TOKEN` / `GH_TOKEN`) | Discussions e `find(include_github=true)` — GraphQL richiede auth anche in lettura | sì, per discussions/write |
 | `DCL_MCP_ENV_FILE` | Path a un file `.env` (fallback: `.env` cercato verso l'alto dal cwd) | no |
 | `ACB_REPO` / `ACB_BRANCH` | Sorgente artefatti contesto (default: ACB, branch `context`) | no |
 
-## Note di design
+## Riferimento tool
 
-- **Context** legge da remoto gli artefatti prodotti dalla CI di
-  [agent-context-builder](https://github.com/dataciviclab/agent-context-builder)
-  sul branch `context` (raw.githubusercontent, cache TTL 120s). Nessuna
-  checkout locale richiesta. `explore` sulle card dataset espone anche
-  description, periodo (`year_min`/`year_max`), `clean_rows`, lista `marts`
-  (da `mart_refs`), colonne compatte (name/type/role), `gcs_path` e
-  `query_hint` pronto.
-- **Una card = un layer**: `gcs_path` e `query_hint` puntano sempre al
-  layer della card (clean per un dataset, mart per uno slug
-  `dataset__table`). La card mart non eredita `clean_rows` né la lista
-  `marts` del dataset padre; la lista `marts` sulla card dataset resta
-  dato, non hint — per l'hint del mart si fa `explore(<mart_slug>)`.
-  Il `name` di un mart viene dal registry del producer e, se il registry
-  non lo committa, coincide con lo slug `dataset__table` (mai col nome del
-  dataset padre, che rendeva indistinguibili i mart dello stesso dataset).
-- **`clean_rows`** è il conteggio dell'ultimo snapshot clean pubblicato dal
-  producer: **non è garantito** sia la serie completa. Per numeri citabili
-  usa `query_hint` (`count(*)`) via `gcs_query`.
-- **GCS** è read-only: solo bucket `dataciviclab-clean` e
-  `dataciviclab-mart`, una sola istruzione per chiamata (SELECT o
-  WITH…SELECT, niente DML/PRAGMA), limite 500 righe (clamp dichiarato).
-  La query deve leggere la tabella `_data` (view sul parquet). La
-  validazione gira sull'**AST** che DuckDB produce con
-  `json_serialize_sql`: ogni sorgente di righe (`BASE_TABLE`) deve essere
-  `_data` o una CTE della query — **incluse le sorgenti scritte come
-  stringa** (`FROM '/tmp/x.csv'`, sintassi DuckDB valida che legge il
-  file) — e nessuna funzione di lettura (`read_*`, `*_scan`, `glob`, …)
-  può comparire, né in `FROM` né come scalare in `WHERE`. Le sole table
-  function ammesse sono quelle in memoria (`unnest`, `range`,
-  `generate_series`). È un guardrail, non un sandbox: non eseguire query
-  di terzi non fidati.
-  Per i mart usa `layer=mart` e lo slug `dataset__table` (in `marts`
-  della card, o dal registry del repo produttore).
-- **Ref tipizzati**: in caso di collisione di slug (es. repo e analysis
-  con lo stesso nome) `explore("analysis:slug")` forza il tipo; senza
-  prefisso l'ordine è dataset → repo → domain → source → analysis.
-- **Rimozioni (v0.2)**: `github_get_discussion_summary` →
-  `github_get_discussion(mode="summary")`;
-  `github_get_discussion_comments` →
-  `github_get_discussion(include_comments=True)`;
-  `github_search_discussions` → `github_list_discussions(query=…)`.
-  `refresh_context` è stato rimosso: il rebuild degli artefatti è
-  un'azione operativa da CLI/CI di ACB, non da un MCP per esterni.
-- **`find.total`** = `total_catalog` + `total_external` (quest'ultimo solo
-  con `include_github=true`). `total_catalog` conta tutti i match nel
-  catalogo; `returned` dice quanti ne stai vedendo (`limit`). Con
-  `include_github=true` la risposta ha anche `github_ok` e, se qualcosa
-  fallisce, `github_errors`: un token assente/scaduto non viene più
-  confuso con "nessun risultato".
-- **Envelope `ok`**: ogni risposta ha `ok` (anche gli errori, con
-  `error`/`message`). I 5 tool Discussions hanno `repo_full_name` con
-  default `dataciviclab/dataciviclab`.
-- **Un solo trasporto HTTP**: context, `find(include_github=true)` e
-  Discussions passano dallo stesso `HttpClient` di lab-connectors (retry,
-  circuit breaker, un solo pool) e dalla stessa risoluzione del token.
-  La ricerca discussioni org-wide usa la query GraphQL di
-  `discussions.client` — non esiste una seconda copia in `context/`.
-- **Cache**: schema dei parquet mart (`DESCRIBE`) cachato 10 min come il
-  registry — `explore` non ripete il round-trip GCS.
-- I nomi dei tool sono contratti cross-repo (skill, docs, config utente):
-  non vanno cambiati senza migrazione.
+| Famiglia | Tool | Cosa fa |
+|---|---|---|
+| **Context** | `session_bootstrap` | Orientamento rapido (markdown) |
+| | `lab_map(domain=)` | Domini → repo → fonti; con `domain=` i totali sono quelli del dominio |
+| | `find(query, type=, domain=, include_github=)` | Ricerca ranked cross-entity, con `total_catalog` e `returned` |
+| | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis |
+| | `join_suggestions(slug, limit=, min_years=, include_names=)` | Dataset joinabili dai semantic_type: colonne, overlap anni, `type_mismatch` |
+| | `workspace_triage(section=)` | Stato Lab: radar, PR, issue, discussioni |
+| **Discussions** | `github_list_discussions(query=, category_name=)` | Elenca o cerca full-text/categoria |
+| | `github_list_discussion_categories` | Categorie valide per la creazione |
+| | `github_get_discussion(include_comments=)` | Legge una discussion, con commenti e reply |
+| | `github_create_discussion` | Apre una discussion |
+| | `github_add_discussion_comment` | Commenta una discussion |
+| **GCS** | `gcs_query(slug, sql, layer=, limit=)` | SELECT/CTE read-only sui parquet pubblici |
 
-## Modifiche (v0.4)
+Ogni risposta ha `ok` (anche gli errori, con `error`/`message`). I tool
+Discussions usano `repo_full_name` con default `dataciviclab/dataciviclab`.
 
-Cambi di contratto rispetto alla v0.3 — i **nomi dei tool** non cambiano:
+## Limiti e sicurezza
 
-- `gcs_query` e la card mart di `explore` espongono `gcs_path` (era
-  `gs_path`): un solo nome per il path in tutto il server.
-- Rimossi `marts_hint` (card dataset) e `marts_query_hint` (card mart):
-  resta `query_hint`, sempre del layer della card.
-- La card mart non eredita più `clean_rows`, `clean_rows_note` e `marts`
-  dal dataset padre, e il `name` è quello del mart (non del padre).
-- `find` espone `returned`; `total_catalog` è il totale dei match e non
-  più `len(results)` (era limitato da `limit`).
-- `find(type=…)` con un tipo sconosciuto risponde `ok:false` con
-  `valid_types` (prima: zero risultati silenziosi).
-- `lab_map(domain=…)` riporta `totals` del dominio, non globali.
-- `gcs_query` valida la SQL sull'AST di DuckDB: sorgenti `FROM`/`JOIN`
-  limitate a `_data`/CTE (anche quando scritte come stringa), funzioni di
-  lettura rifiutate ovunque compaiano.
-- Un solo client HTTP (lab-connectors) e una sola risoluzione del token
-  per context, `find(include_github)` e Discussions. `httpx` e
-  `python-dotenv` non sono più dipendenze.
+- **GCS read-only**: solo i bucket `dataciviclab-clean` e `dataciviclab-mart`,
+  una sola istruzione per chiamata, max 500 righe, tabella `_data` (view sul
+  parquet). Nessun DML/PRAGMA.
+- **È un guardrail, non un sandbox**: non eseguire query di terzi non fidati.
+  I dettagli della validazione AST sono in [docs/DESIGN.md](docs/DESIGN.md).
+- **Nomi dei tool = contratto cross-repo** (skill, config utente, docs): non
+  cambiano senza migrazione.
+
+## Altri server del Lab
+
+| Server | A cosa serve |
+|---|---|
+| **dcl-mcp** (questo) | org-wide: dove cerco, cosa è successo, come partecipo, dati pubblicati |
+| **toolkit** | repo locale: pipeline, contratti, SQL su raw/clean/mart del workspace |
+| **source-observatory** | scouting fonti e inventory |
+| **github** | leggere/scrivere un issue o una PR specifica |
+
+`find(include_github=true)` qui è **scoperta Lab-scoped** (issue/PR aperte i
+cui titoli contengono i token della query), non sostituisce il server `github`.
 
 ## Sviluppo
 
@@ -163,11 +142,8 @@ ruff check src/ tests/
 mypy src/dcl_mcp/
 ```
 
-Storia: questo server nasce dalla migrazione di `dataciviclab-context`
-(ACB) e `github-discussions` (lab-connectors) + il nuovo `gcs_query`,
-modellato su tre passate di audit con agenti newcomer. Il builder degli
-artefatti resta in ACB; le librerie condivise in
-[lab-connectors](https://github.com/dataciviclab/lab-connectors).
+Storia e scelte di design: [docs/DESIGN.md](docs/DESIGN.md).
+Cambi di contratto: [CHANGELOG.md](CHANGELOG.md).
 
 ## Licenza
 
