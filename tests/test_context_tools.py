@@ -576,3 +576,56 @@ def test_artifact_cache_reuses_topic_index():
         assert ctx_fetch.artifact_cache.stats.entries >= 1
     finally:
         _clear_fake()
+
+
+@pytest.mark.contract
+def test_join_suggestions_tool_returns_dataset_pairs():
+    fake = FakeHttpClient()
+    index = {
+        "datasets": {
+            "anac": [
+                {
+                    "slug": "bandi",
+                    "name": "Bandi",
+                    "category": "appalti",
+                    "period": {"start": 2020, "end": 2023},
+                    "columns": [
+                        {"name": "cig", "type": "VARCHAR", "role": "dimension", "semantic_type": "cig_code"},
+                        {"name": "anno", "type": "INTEGER", "role": "dimension", "semantic_type": "year"},
+                    ],
+                },
+                {
+                    "slug": "subappalti",
+                    "name": "Subappalti",
+                    "category": "appalti",
+                    "period": {"start": 2021, "end": 2023},
+                    "columns": [
+                        {"name": "cig", "type": "VARCHAR", "role": "dimension", "semantic_type": "cig_code"},
+                    ],
+                },
+            ]
+        },
+        "by_slug": {"subappalti": {"registry_source": "appalti-pubblici"}},
+    }
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(index))
+    _use_fake(fake)
+
+    result = context_tools.join_suggestions("bandi")
+
+    assert result["ok"] is True
+    assert result["suggestions"][0]["slug"] == "subappalti"
+    assert result["suggestions"][0]["repo"] == "appalti-pubblici"
+    assert result["suggestions"][0]["on"][0]["type"] == "cig_code"
+
+
+@pytest.mark.contract
+def test_join_suggestions_tool_unknown_slug_is_honest():
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text='{"datasets": {}}')
+    _use_fake(fake)
+
+    result = context_tools.join_suggestions("non_esiste")
+
+    assert result["ok"] is True
+    assert result["found"] is False
+    assert "non presente" in result["message"]

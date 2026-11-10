@@ -131,6 +131,39 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
 
 @mcp.tool(
     description=(
+        "Suggerisce dataset joinabili con `slug`, derivati dai semantic_type "
+        "dell'artifact (nessuna relazione scritta a mano). Restituisce, per ogni "
+        "candidato, le coppie di colonne (`mine`/`theirs`), il tipo semantico, "
+        "l'overlap anni e `type_mismatch`. Chiavi temporali/geografiche generiche "
+        "(anno, mese, paese) sono escluse; `specific` conta le chiavi non "
+        "territoriali (CIG, CUP, CF...), usate per il ranking. "
+        "I nomi comune sono esclusi salvo `include_names=True` (confronto fragile)."
+    ),
+    structured_output=True,
+)
+def join_suggestions(
+    slug: str,
+    limit: int = 5,
+    min_years: int = 1,
+    include_names: bool = False,
+) -> dict[str, object]:
+    from dcl_mcp.context.joins import join_suggestions as _suggest
+
+    def _exec() -> dict[str, object]:
+        data = ctx_fetch.load_topic_index()
+        return _suggest(
+            data,
+            slug,
+            limit=limit,
+            min_years=min_years,
+            include_names=include_names,
+        )
+
+    return guard_ok(_exec, "join_suggestions")
+
+
+@mcp.tool(
+    description=(
         "Ranked search across datasets, repos, domains, sources, and analyses. "
         "All query tokens must match (cross-field AND): words may be spread "
         "across slug, name, tags, description, source_id and column schema "

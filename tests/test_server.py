@@ -18,6 +18,7 @@ EXPECTED_TOOLS = sorted(
         "lab_map",
         "find",
         "explore",
+        "join_suggestions",
         # discussions (ex github-discussions server)
         "github_list_discussions",
         "github_list_discussion_categories",
