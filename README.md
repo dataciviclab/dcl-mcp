@@ -18,6 +18,7 @@ Un solo server, nome `dataciviclab` — 11 tool in tre famiglie:
 | | `lab_map(domain=)` | Albero domains → repos → sources; con `domain=` i `totals` sono quelli del dominio (dominio sconosciuto → elenco domini validi) |
 | | `find(query, type=, domain=)` | Ricerca ranked cross-entity; `total_catalog` (match totali) + `returned` (quanti ne vedi) + `total_external` (+ `github_errors` se `include_github` fallisce). `type=` sconosciuto → `ok:false` coi tipi validi |
 | | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis — ref tipizzabili (`analysis:slug`, `repo:slug`, …) |
+| | `join_suggestions(slug, limit=, min_years=, include_names=)` | Dataset joinabili, derivati dai semantic_type: coppie di colonne, overlap anni, `type_mismatch`; chiavi specifiche (CIG/CUP/CF) prima delle geografiche |
 | | `workspace_triage(section=)` | Stato Lab: radar, PR, issues, discussions… |
 | **Discussions** | `github_list_discussions(query=, category_name=)` | Elenca (cursor) o cerca full-text/categoria server-side; `repo_full_name` default hub |
 | | `github_list_discussion_categories` | Categorie valide per la creazione (nome + slug) |
