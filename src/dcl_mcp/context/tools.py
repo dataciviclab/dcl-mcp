@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
+from dcl_mcp import telemetry
 from dcl_mcp.app import GITHUB_TOKEN_MISSING, get_http, github_token, mcp
 from dcl_mcp.context import fetch as ctx_fetch
 from dcl_mcp.context.search import (
@@ -167,6 +169,9 @@ def lab_map(domain: str | None = None, view: str | None = None) -> dict[str, obj
             rows = dataset_listing(
                 data, domain=domain, signals=signal_index(ctx_fetch.load_triage())
             )
+            telemetry.record(
+                "lab_map", {"view": "datasets", "domain": domain}, {"count": len(rows)}
+            )
             return {
                 "content": {"datasets": rows, "count": len(rows), "domain": domain},
                 **catalog_meta(data),
@@ -179,6 +184,11 @@ def lab_map(domain: str | None = None, view: str | None = None) -> dict[str, obj
                 "valid_views": ["tree", "datasets"],
             }
         summary = lab_map_summary(data, domain=domain)
+        telemetry.record(
+            "lab_map",
+            {"view": view or "tree", "domain": domain},
+            {"count": len(summary.get("repos") or [])},
+        )
         return {"content": summary, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "lab_map")
@@ -249,6 +259,7 @@ def find(
     include_github: bool = False,
 ) -> dict[str, object]:
     def _exec() -> dict[str, object]:
+        started = time.perf_counter()
         # Un type= sconosciuto restituiva ok:true con zero risultati: sembrava
         # "non esiste niente" invece di "filtro sbagliato" (lab_map(domain=)
         # era già onesto).
@@ -298,6 +309,15 @@ def find(
         # total resta la somma esplicita: prima veniva gonfiato in-place e
         # non significava più "match nel catalogo".
         payload["total"] = payload["total_catalog"] + payload.get("total_external", 0)
+        telemetry.record(
+            "find",
+            {"query": query, "type": type, "domain": domain, "limit": limit,
+             "github": include_github},
+            {"total": len(matched), "returned": len(results),
+             "top": [r.get("slug") for r in results[:5]],
+             "top_types": [r.get("type") for r in results[:5]]},
+            int((time.perf_counter() - started) * 1000),
+        )
         return {"content": payload, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "find")
@@ -390,6 +410,12 @@ def explore(ref: str) -> dict[str, object]:
             update = signal_index(ctx_fetch.load_triage()).get(str(signal_slug))
             if update:
                 content.update(update)
+        telemetry.record(
+            "explore",
+            {"ref": ref},
+            {"found": bool(content.get("found")) if isinstance(content, dict) else None,
+             "entity": content.get("type") if isinstance(content, dict) else None},
+        )
         return {"content": content, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "explore")

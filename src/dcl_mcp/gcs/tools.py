@@ -13,6 +13,7 @@ from typing import Any
 
 from lab_connectors.duckdb import gcs_connect
 
+from dcl_mcp import telemetry
 from dcl_mcp.app import mcp
 from dcl_mcp.context.fetch import load_topic_index, load_triage
 from dcl_mcp.gcs.resolver import GcsResolveError, resolve, validate_sql
@@ -117,8 +118,16 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
             signal = signal_index(load_triage()).get(resolved.get("dataset") or resolved["slug"])
             if signal:
                 payload.update(signal)
+            telemetry.record(
+                "gcs_query",
+                {"slug": resolved["slug"], "layer": resolved["layer"], "limit": safe_limit},
+                {"n_rows": len(rows), "truncated": truncated, "ok": True},
+            )
             return payload
         except GcsResolveError as exc:
+            telemetry.record(
+                "gcs_query", {"slug": slug, "layer": layer}, {"ok": False, "error": str(exc)[:200]}
+            )
             return {"ok": False, "error": str(exc)}
 
     return guard_ok(_exec, "gcs_query")
