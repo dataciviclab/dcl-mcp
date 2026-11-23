@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from dcl_mcp.context.search import search_index
-from dcl_mcp.provenance import catalog_meta, dataset_snapshot, snapshot_year
+from dcl_mcp.provenance import catalog_meta, dataset_snapshot, signal_index, snapshot_year
 
 pytestmark = pytest.mark.pure_unit
 
@@ -45,6 +45,41 @@ def test_catalog_meta_tolerates_empty_index():
     meta = catalog_meta(None)
     assert meta["as_of"] is None
     assert "schema_version" not in meta
+
+
+def test_signal_index_from_registry_summary():
+    """L'aggiornamento per dataset arriva da registry_summary.signals_detail."""
+    triage = {
+        "registry_summary": [
+            {
+                "repo": "dataset-incubator",
+                "updated_at": "2026-11-22",
+                "signals_detail": [
+                    {
+                        "id": "personale_ssn",
+                        "run": {
+                            "run_id": "x",
+                            "year": 2021,
+                            "status": "SUCCESS",
+                            "started_at": "2026-11-06T22:12:55+00:00",
+                        },
+                    },
+                    {"id": "pensioni_pa_dag"},  # nessuna run
+                ],
+            },
+            {"repo": "rotto", "signals_detail": "non-una-lista"},
+            "non-un-dict",
+        ]
+    }
+    index = signal_index(triage)
+    assert index["personale_ssn"] == {
+        "last_run": "2026-11-06T22:12:55+00:00",
+        "run_year": 2021,
+        "run_status": "SUCCESS",
+        "repo_updated_at": "2026-11-22",
+    }
+    assert index["pensioni_pa_dag"]["last_run"] is None
+    assert signal_index(None) == {}
 
 
 def test_dataset_snapshot_from_location():

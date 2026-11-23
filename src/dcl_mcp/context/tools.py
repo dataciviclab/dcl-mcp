@@ -23,7 +23,7 @@ from dcl_mcp.context.search import (
 )
 from dcl_mcp.discussions.client import search_org_discussions
 from dcl_mcp.guards import guard_ok
-from dcl_mcp.provenance import catalog_meta
+from dcl_mcp.provenance import catalog_meta, signal_index
 
 
 @mcp.tool(
@@ -185,9 +185,10 @@ def join_suggestions(
         "Returns type + parent pointers + score; total_catalog is the number "
         "of matches in the catalog, returned is how many you actually see "
         "(<= limit). Dataset results also carry snippet, years, n_columns, "
-        "n_marts and snapshot_year (year of the published GCS file): enough "
-        "to choose without explore(). The payload has as_of (catalog build "
-        "time, not data freshness). "
+        "n_marts, snapshot_year (year of the published GCS file) and the "
+        "pipeline freshness (last_run, run_year, repo_updated_at): enough "
+        "to choose and to judge staleness without explore(). The payload has "
+        "as_of (catalog build time, not data freshness). "
         "Use explore(ref) for details. "
         "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs whose "
         "title contains all query tokens, and top open Discussions of the org "
@@ -217,6 +218,15 @@ def find(
         # totale, non `len(results)` (era al massimo `limit`).
         matched = search_index(data, query, entity_type=type, domain=domain, limit=None)
         results = matched[: max(limit, 1)]
+        # Aggiornamento reale per dataset (ultima run di pipeline + updated_at
+        # del repo), agganciato qui per non obbligare l'agente a incrociare
+        # `workspace_triage(section="registry")` con 547 `explore`.
+        signals = signal_index(ctx_fetch.load_triage())
+        for item in results:
+            if item.get("type") == "dataset":
+                update = signals.get(str(item.get("slug")))
+                if update:
+                    item.update(update)
         payload: dict[str, Any] = {
             "query": query,
             "total_catalog": len(matched),
@@ -253,7 +263,8 @@ def find(
         "Deep-dive any Lab entity by ref: dataset slug, repo name, domain slug, "
         "source id, or analysis slug. Returns card + children + routing hints. "
         "The payload has as_of (catalog build time); a dataset/mart card has "
-        "snapshot_year (year of the published GCS file, if in the path)."
+        "snapshot_year (year of the published GCS file, if in the path) and "
+        "the pipeline freshness (last_run, run_year, repo_updated_at)."
     ),
     structured_output=True,
 )
@@ -316,6 +327,13 @@ def explore(ref: str) -> dict[str, object]:
                 # gcs_path/query_hint ereditati dal clean sarebbero sbagliati
                 content.pop("gcs_path", None)
                 content.pop("query_hint", None)
+        # Aggiornamento reale della pipeline (una card databile); per i mart si
+        # usa lo slug del dataset padre, che è la chiave dei segnali.
+        if isinstance(content, dict) and content.get("type") in ("dataset", "mart"):
+            signal_slug = content.get("dataset") or content.get("slug")
+            update = signal_index(ctx_fetch.load_triage()).get(str(signal_slug))
+            if update:
+                content.update(update)
         return {"content": content, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "explore")

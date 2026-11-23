@@ -70,3 +70,16 @@ def load_topic_index() -> dict[str, Any]:
     raw = fetch("topic_index.json")
     data = json.loads(raw)
     return data if isinstance(data, dict) else {}
+
+
+def load_triage() -> dict[str, Any]:
+    """Fetch + parse di workspace_triage.json (vuoto se non disponibile).
+
+    Non fatale: la provienza per dataset è un arricchimento, non una
+    precondizione dei tool.
+    """
+    try:
+        data = json.loads(fetch("workspace_triage.json"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}

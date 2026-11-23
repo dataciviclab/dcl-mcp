@@ -55,3 +55,35 @@ def dataset_snapshot(entry: dict[str, Any] | None) -> dict[str, Any]:
         "snapshot_year": snapshot_year(path),
         "multi_file": bool(location.get("multi_file")),
     }
+
+
+def signal_index(triage: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Indice slug → aggiornamento reale, da `workspace_triage.registry_summary`.
+
+    `registry_summary[]` porta, per repo, `updated_at` e `signals_detail[]` con
+    `run` (run_id, year, started_at): è l'ultima esecuzione della pipeline per
+    dataset. Fino a oggi era raggiungibile solo con
+    `workspace_triage(section="registry")` (191 KB) e mai agganciata ai
+    dataset: l'agente doveva ricostruire la mappa a mano (audit R02: 2.556
+    `explore` per una domanda che questi dati permettono di rispondere in una
+    chiamata).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for repo in (triage or {}).get("registry_summary") or []:
+        if not isinstance(repo, dict):
+            continue
+        repo_updated = repo.get("updated_at") or None
+        for signal in repo.get("signals_detail") or []:
+            if not isinstance(signal, dict):
+                continue
+            slug = signal.get("id") or signal.get("label")
+            if not slug:
+                continue
+            run = signal.get("run") or {}
+            out[slug] = {
+                "last_run": run.get("started_at"),
+                "run_year": run.get("year"),
+                "run_status": run.get("status"),
+                "repo_updated_at": repo_updated,
+            }
+    return out

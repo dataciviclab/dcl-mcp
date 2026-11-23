@@ -14,10 +14,10 @@ from typing import Any
 from lab_connectors.duckdb import gcs_connect
 
 from dcl_mcp.app import mcp
-from dcl_mcp.context.fetch import load_topic_index
+from dcl_mcp.context.fetch import load_topic_index, load_triage
 from dcl_mcp.gcs.resolver import GcsResolveError, resolve, validate_sql
 from dcl_mcp.guards import guard_ok
-from dcl_mcp.provenance import catalog_meta, snapshot_year
+from dcl_mcp.provenance import catalog_meta, signal_index, snapshot_year
 
 _MAX_LIMIT = 500
 _DEFAULT_LIMIT = 100
@@ -58,8 +58,9 @@ def _run_query(read_paths: list[str], sql: str, limit: int) -> tuple[list[str], 
         "(es. SELECT anno, count(*) FROM _data GROUP BY anno); sono ammesse "
         "anche CTE (WITH … SELECT). "
         "Una sola istruzione, limit= max righe in output (default 100, max 500). "
-        "La risposta riporta snapshot_year (anno del file letto) e as_of "
-        "(quando è stato costruito il catalogo): servono a datare un numero. "
+        "La risposta riporta snapshot_year (anno del file letto), as_of "
+        "(quando è stato costruito il catalogo) e l'aggiornamento della "
+        "pipeline (last_run, run_year): servono a datare un numero. "
         "Scopri gli slug con find()/explore() — explore restituisce anche "
         "columns e gcs_path. Serve solo per i dati pubblicati: per "
         "raw/contratti/pipeline usa il MCP toolkit."
@@ -112,6 +113,10 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
             }
             if requested > _MAX_LIMIT:
                 payload["limit_clamped"] = f"{requested} → {_MAX_LIMIT} (max consentito)"
+            # Aggiornamento della pipeline per il dataset dietro lo slug.
+            signal = signal_index(load_triage()).get(resolved.get("dataset") or resolved["slug"])
+            if signal:
+                payload.update(signal)
             return payload
         except GcsResolveError as exc:
             return {"ok": False, "error": str(exc)}
