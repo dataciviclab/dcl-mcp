@@ -95,11 +95,11 @@ Per altri client che usano il formato `mcpServers`, l'entry è
 | Famiglia | Tool | Cosa fa |
 |---|---|---|
 | **Context** | `session_bootstrap` | Orientamento rapido (markdown) |
-| | `lab_map(domain=)` | Domini → repo → fonti; con `domain=` i totali sono quelli del dominio |
+| | `lab_map(domain=, view=)` | Domini → repo → fonti; `view="datasets"` elenca i dataset con anni, freschezza e accessibilità GCS |
 | | `find(query, type=, domain=, include_github=)` | Ricerca ranked cross-entity, con `total_catalog` e `returned` |
 | | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis |
 | | `join_suggestions(slug, limit=, min_years=, include_names=)` | Dataset joinabili dai semantic_type: colonne, overlap anni, `type_mismatch` |
-| | `workspace_triage(section=)` | Stato Lab: radar, PR, issue, discussioni |
+| | `workspace_triage(section=, detail=)` | Stato Lab: radar, PR, issue, discussioni; `registry` compatto, `detail=true` per i run per dataset |
 | **Discussions** | `github_list_discussions(query=, category_name=)` | Elenca o cerca full-text/categoria |
 | | `github_list_discussion_categories` | Categorie valide per la creazione |
 | | `github_get_discussion(include_comments=)` | Legge una discussion, con commenti e reply |
@@ -107,7 +107,9 @@ Per altri client che usano il formato `mcpServers`, l'entry è
 | | `github_add_discussion_comment` | Commenta una discussion |
 | **GCS** | `gcs_query(slug, sql, layer=, limit=)` | SELECT/CTE read-only sui parquet pubblici |
 
-Ogni risposta ha `ok` (anche gli errori, con `error`/`message`). I tool
+Ogni risposta ha `ok` (anche gli errori, con `error`/`message`). I tool che
+leggono il catalogo espongono `as_of` (quando è stato costruito) e le card
+dataset/mart `snapshot_year` (anno del file pubblicato). I tool
 Discussions usano `repo_full_name` con default `dataciviclab/dataciviclab`.
 
 ## Limiti e sicurezza
@@ -137,7 +139,8 @@ cui titoli contengono i token della query), non sostituisce il server `github`.
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -q -m "not smoke"
-pytest tests/test_smoke.py -q -m smoke   # golden path, rete richiesta
+pytest tests/test_smoke.py -q -m smoke      # golden path in-process, rete
+pytest tests/test_e2e_stdio.py -q -m smoke  # spawn del server + protocollo MCP
 ruff check src/ tests/
 mypy src/dcl_mcp/
 ```

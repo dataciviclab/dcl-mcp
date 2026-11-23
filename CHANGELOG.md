@@ -5,7 +5,49 @@ Storia completa: `git log`.
 
 ## [Unreleased]
 
+### Changed
+
+- `workspace_triage(section="registry")` è **compatto per default**: niente
+  `signals_detail` (~186 KB → 10 KB). Il dettaglio per dataset è già in
+  `find`/`explore`/`lab_map(view="datasets")`; per averlo:
+  `detail=true`. **Breaking** per chi leggeva `signals_detail` senza chiedere.
+
 ### Added
+
+- `lab_map(view="datasets", domain=)` — enumerazione del catalogo: una riga per
+  dataset con `years`, `gcs_available`, `snapshot_year`, `n_columns`,
+  `last_run`, `run_year` (~121 KB per 547; 2–38 KB per dominio, media ~18 KB). Risponde a
+  domande di catalogo ("quali sono obsoleti?") senza un `explore` per dataset:
+  nell'audit la stessa domanda costava 1.516–2.606 chiamate con esito
+  non deterministico.
+- Provenienza strutturata: `as_of` (quando è stato costruito il catalogo) e
+  `source` in `find`, `explore`, `lab_map`, `join_suggestions`, `gcs_query`,
+  `workspace_triage`, `session_bootstrap`; `snapshot_year` (anno del file
+  pubblicato su GCS) nelle card dataset/mart e in `gcs_query`.
+  Motivo: senza data l'agente non può citare un risultato né dire se un dataset
+  è aggiornato (audit usabilità 2026-11-23, F8/F10; R02: 1.772 chiamate e
+  timeout su una domanda senza criterio di stop).
+- `find`: ogni risultato dataset porta `snippet`, `years`, `n_columns`,
+  `n_marts`, `snapshot_year`, `gcs_available` e l'aggiornamento della pipeline
+  (`last_run`, `run_year`, `repo_updated_at`) — bastano a scegliere e a
+  giudicare la freschezza senza un `explore` per candidato (audit F5).
+- `explore`: card dataset con `source` (etichetta della fonte), `url` (pagina
+  Explorer), `gcs_available`, `clean_rows_scope` (`single_file` |
+  `last_year_of_multi_file`), `joins` (2 dataset collegabili per chiave);
+  mart con `n_columns`, `primary_key` (se nel registry) e `columns_note`
+  quando `role`/`semantic_type` non sono deducibili; analysis con `year_min`/
+  `year_max` strutturati; repo/domain/source con `datasets_total` e
+  `truncated` (prima la lista era tagliata a 50 in silenzio).
+
+### Removed
+
+- `stage` da ogni risposta (dataset, mart, `find`, `lab_map`). È un campo
+  editoriale che resta stale: `published` copriva 33 dataset su 547, mentre
+  536 hanno un parquet leggibile. L'accessibilità reale è `gcs_available`.
+  **Breaking** per i consumer che leggevano `stage`.
+- `n_published` (repo) e `totals.published` (`lab_map`): il valore del builder
+  diceva 0 su repo con 15 dataset su GCS. Sostituiti da `n_with_gcs` /
+  `totals.with_gcs`, calcolati dalle `location` reali.
 
 - `join_suggestions(slug, limit, min_years, include_names)`: dataset joinabili
   derivati dai `semantic_type` dell'artifact. Coppie di colonne, overlap anni,

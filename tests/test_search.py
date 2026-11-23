@@ -116,7 +116,7 @@ def test_lab_map_summary_tree(sample_index):
     summary = lab_map_summary(sample_index)
     assert summary["ok"] is True
     assert summary["totals"]["datasets"] == 3
-    assert summary["totals"]["published"] == 2
+    assert summary["totals"]["with_gcs"] == 2
     assert {d["slug"] for d in summary["domains"]} == {"territorio-ambiente", "finanza-pubblica"}
     assert any(r["repo"] == "toolkit" for r in summary["repos"])
     assert summary["sources"]["ispra"] == 1
@@ -129,7 +129,7 @@ def test_lab_map_summary_domain_filter(sample_index):
     assert all(r["domain"] == "finanza-pubblica" for r in summary["repos"])
     # I totali seguono il filtro: prima restavano globali (3 dataset su 1 dominio).
     assert summary["totals"]["datasets"] == 1
-    assert summary["totals"]["published"] == 0
+    assert summary["totals"]["with_gcs"] == 0
     assert summary["totals"]["analyses"] == 0
 
 
@@ -159,7 +159,7 @@ def test_explore_dataset_repo_domain(sample_index):
     repo = explore_ref(sample_index, "rifiuti-urbani")
     assert repo["found"] is True and repo["type"] == "repo"
     assert repo["datasets"] == ["ispra_ru_base"]
-    assert repo["n_published"] == 1
+    assert repo["n_with_gcs"] == 1
 
     dom = explore_ref(sample_index, "territorio-ambiente")
     assert dom["found"] is True and dom["type"] == "domain"

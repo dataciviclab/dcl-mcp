@@ -9,12 +9,14 @@ operativa che si lancia dalla CLI/CI di ACB, non da un MCP per esterni.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from dcl_mcp.app import GITHUB_TOKEN_MISSING, get_http, github_token, mcp
 from dcl_mcp.context import fetch as ctx_fetch
 from dcl_mcp.context.search import (
     ENTITY_TYPES,
+    dataset_listing,
     explore_ref,
     lab_map_summary,
     normalize_entity_type,
@@ -22,29 +24,47 @@ from dcl_mcp.context.search import (
 )
 from dcl_mcp.discussions.client import search_org_discussions
 from dcl_mcp.guards import guard_ok
+from dcl_mcp.provenance import catalog_meta, signal_index
 
 
 @mcp.tool(
-    description="Quick orientation — compact markdown overview of Lab state.",
+    description=(
+        "Quick orientation — compact markdown overview of Lab state. "
+        "Narrative entry point: for numbers and structure use workspace_triage "
+        "and lab_map."
+    ),
     structured_output=True,
 )
 def session_bootstrap() -> dict[str, object]:
     def _exec() -> dict[str, object]:
         content = ctx_fetch.fetch("session_bootstrap.md")
-        return {"content": content, "format": "markdown", "ok": True}
+        # `as_of` strutturato: la data c'è già nel markdown, ma un agente che
+        # non lo parsa non può datare la risposta (audit F8).
+        match = re.search(r"\*\*Generated\*\*:\s*(\S+)", content)
+        return {
+            "content": content,
+            "format": "markdown",
+            "as_of": match.group(1) if match else None,
+            "ok": True,
+        }
 
     return guard_ok(_exec, "session_bootstrap")
 
 
 @mcp.tool(
     description=(
-        "Machine-readable Lab state. Default: compact summary. "
+        "Machine-readable Lab state (numbers and lists). Default: compact "
+        "summary. For the narrative overview use session_bootstrap. "
         "Use section= to get a specific part: radar, prs, issues, "
-        "discussions, registry, git, warnings."
+        "discussions, registry, git, warnings. "
+        "registry is compact by default (per-repo counts + updated_at); "
+        "detail=true adds per-dataset pipeline runs (signals_detail, ~190 KB)."
     ),
     structured_output=True,
 )
-def workspace_triage(section: str | None = None) -> dict[str, object]:
+def workspace_triage(
+    section: str | None = None, detail: bool = False
+) -> dict[str, object]:
     def _exec() -> dict[str, object]:
         raw = ctx_fetch.fetch("workspace_triage.json")
         data: dict = json.loads(raw)
@@ -69,10 +89,26 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
                 "issues": data.get("open_issues") or len(data.get("issues", [])),
                 "discussions": data.get("open_discussions") or len(data.get("discussions", [])),
                 "warnings": data.get("warnings", []),
+                "as_of": data.get("generated_at"),
                 "ok": True,
             }
 
         # Section filter
+        def _registry(d: dict) -> dict:
+            # `signals_detail` (~190 KB, una voce per dataset) duplica ciò che
+            # `find`/`explore`/`lab_map(view="datasets")` già espongono.
+            # Resta disponibile con detail=true.
+            repos = d.get("registry_summary", [])
+            if detail:
+                return {"registry_summary": repos, "detail": True}
+            compact = [
+                {k: v for k, v in repo.items() if k != "signals_detail"}
+                if isinstance(repo, dict)
+                else repo
+                for repo in repos
+            ]
+            return {"registry_summary": compact, "detail": False}
+
         sections = {
             "radar": lambda d: d.get("radar", {}),
             "prs": lambda d: {"prs": d.get("prs", []), "count": len(d.get("prs", []))},
@@ -81,7 +117,7 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
                 "discussions": d.get("discussions", []),
                 "count": len(d.get("discussions", [])),
             },
-            "registry": lambda d: {"registry_summary": d.get("registry_summary", [])},
+            "registry": _registry,
             "git": lambda d: {"git_state": d.get("git_state", {})},
             "warnings": lambda d: {"warnings": d.get("warnings", [])},
             "pipeline": lambda d: {"pipeline_state": d.get("pipeline_state", {})},
@@ -95,7 +131,7 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
                 "error": f"Sezione '{section}' non valida. Opzioni: {list(sections.keys())}",
             }
 
-        return {"content": extractor(data), "ok": True}
+        return {"content": extractor(data), "as_of": data.get("generated_at"), "ok": True}
 
     return guard_ok(_exec, "workspace_triage")
 
@@ -104,11 +140,15 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
     description=(
         "Lab navigation map — domains → repos → sources. "
         "Use domain= to focus on one editorial theme: an unknown domain "
-        "returns ok=false with the list of valid domain slugs."
+        "returns ok=false with the list of valid domain slugs. "
+        "view='datasets' returns one row per dataset (slug, name, years, "
+        "gcs_available, snapshot_year, n_columns, last_run, run_year) — "
+        "~120 KB for all 547; use domain= to shrink it (2-38 KB): use it to enumerate "
+        "the catalog instead of calling explore on every dataset."
     ),
     structured_output=True,
 )
-def lab_map(domain: str | None = None) -> dict[str, object]:
+def lab_map(domain: str | None = None, view: str | None = None) -> dict[str, object]:
     def _exec() -> dict[str, object]:
         data = ctx_fetch.load_topic_index()
         if domain:
@@ -123,8 +163,23 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
                     "error": f"Dominio '{domain}' non trovato. Domini validi: {valid}",
                     "valid_domains": valid,
                 }
+        if view == "datasets":
+            rows = dataset_listing(
+                data, domain=domain, signals=signal_index(ctx_fetch.load_triage())
+            )
+            return {
+                "content": {"datasets": rows, "count": len(rows), "domain": domain},
+                **catalog_meta(data),
+                "ok": True,
+            }
+        if view not in (None, "tree"):
+            return {
+                "ok": False,
+                "error": f"view '{view}' non valida. Opzioni: tree, datasets.",
+                "valid_views": ["tree", "datasets"],
+            }
         summary = lab_map_summary(data, domain=domain)
-        return {"content": summary, "ok": True}
+        return {"content": summary, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "lab_map")
 
@@ -151,13 +206,15 @@ def join_suggestions(
 
     def _exec() -> dict[str, object]:
         data = ctx_fetch.load_topic_index()
-        return _suggest(
+        result = _suggest(
             data,
             slug,
             limit=limit,
             min_years=min_years,
             include_names=include_names,
         )
+        result.update(catalog_meta(data))
+        return result
 
     return guard_ok(_exec, "join_suggestions")
 
@@ -171,7 +228,13 @@ def join_suggestions(
         "Filters: type= (dataset|repo|domain|source|analysis), domain=, limit=. "
         "Returns type + parent pointers + score; total_catalog is the number "
         "of matches in the catalog, returned is how many you actually see "
-        "(<= limit). Use explore(ref) for details. "
+        "(<= limit). Dataset results also carry snippet, years, n_columns, "
+        "n_marts, snapshot_year (year of the published GCS file) and the "
+        "pipeline freshness (last_run, run_year, repo_updated_at): enough "
+        "to choose and to judge staleness without explore(). The payload has "
+        "as_of (catalog build time, not data freshness). "
+        "Repo/domain/source results are compact: use explore(ref) for their "
+        "card. Use explore(ref) for details. "
         "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs whose "
         "title contains all query tokens, and top open Discussions of the org "
         "on the same query."
@@ -200,6 +263,15 @@ def find(
         # totale, non `len(results)` (era al massimo `limit`).
         matched = search_index(data, query, entity_type=type, domain=domain, limit=None)
         results = matched[: max(limit, 1)]
+        # Aggiornamento reale per dataset (ultima run di pipeline + updated_at
+        # del repo), agganciato qui per non obbligare l'agente a incrociare
+        # `workspace_triage(section="registry")` con 547 `explore`.
+        signals = signal_index(ctx_fetch.load_triage())
+        for item in results:
+            if item.get("type") == "dataset":
+                update = signals.get(str(item.get("slug")))
+                if update:
+                    item.update(update)
         payload: dict[str, Any] = {
             "query": query,
             "total_catalog": len(matched),
@@ -226,7 +298,7 @@ def find(
         # total resta la somma esplicita: prima veniva gonfiato in-place e
         # non significava più "match nel catalogo".
         payload["total"] = payload["total_catalog"] + payload.get("total_external", 0)
-        return {"content": payload, "ok": True}
+        return {"content": payload, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "find")
 
@@ -234,7 +306,12 @@ def find(
 @mcp.tool(
     description=(
         "Deep-dive any Lab entity by ref: dataset slug, repo name, domain slug, "
-        "source id, or analysis slug. Returns card + children + routing hints."
+        "source id, or analysis slug. Returns card + children + routing hints. "
+        "The payload has as_of (catalog build time); a dataset/mart card has "
+        "snapshot_year (year of the published GCS file, if in the path) and "
+        "the pipeline freshness (last_run, run_year, repo_updated_at) and a "
+        "`joins` teaser (top 2, with joins_total): the full ranked list with "
+        "type_mismatch comes from join_suggestions(slug)."
     ),
     structured_output=True,
 )
@@ -267,6 +344,15 @@ def explore(ref: str) -> dict[str, object]:
                 columns = describe_parquet_columns(resolved["read_paths"])
             if columns:
                 content["columns"] = columns
+                content["n_columns"] = len(columns)
+                # Onestà: le colonne del mart vengono dal DESCRIBE del parquet,
+                # che non porta role/semantic_type. Senza dirlo, l'agente
+                # presume che valgano come quelle del clean.
+                if not any("role" in column for column in columns):
+                    content["columns_note"] = (
+                        "Colonne dal parquet (DESCRIBE): solo nome e tipo. "
+                        "role e semantic_type non sono disponibili per i mart."
+                    )
                 if detail and detail.get("primary_key"):
                     content["primary_key"] = detail["primary_key"]
                 content.pop("note", None)
@@ -297,7 +383,14 @@ def explore(ref: str) -> dict[str, object]:
                 # gcs_path/query_hint ereditati dal clean sarebbero sbagliati
                 content.pop("gcs_path", None)
                 content.pop("query_hint", None)
-        return {"content": content, "ok": True}
+        # Aggiornamento reale della pipeline (una card databile); per i mart si
+        # usa lo slug del dataset padre, che è la chiave dei segnali.
+        if isinstance(content, dict) and content.get("type") in ("dataset", "mart"):
+            signal_slug = content.get("dataset") or content.get("slug")
+            update = signal_index(ctx_fetch.load_triage()).get(str(signal_slug))
+            if update:
+                content.update(update)
+        return {"content": content, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "explore")
 
