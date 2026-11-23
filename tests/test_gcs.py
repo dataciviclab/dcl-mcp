@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from dcl_mcp.gcs import resolver
+from dcl_mcp.gcs import tools as gcs_tools
 from dcl_mcp.gcs.resolver import (
     GcsResolveError,
     resolve,
@@ -515,3 +516,28 @@ def test_gcs_query_exact_limit_not_truncated(monkeypatch, tmp_path, sample_index
     result = gcs_tools.gcs_query(slug="demo_ds", sql="SELECT n FROM _data", limit=2)
     assert result["n_rows"] == 2
     assert result["truncated"] is False
+
+
+class _FakeConn:
+    closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.contract
+def test_persistent_connection_is_reused(monkeypatch):
+    """Una sola connessione DuckDB per processo: la listing del glob è pagata
+    una volta (~2 s), non a ogni query."""
+    sentinel = _FakeConn()
+    monkeypatch.setattr(gcs_tools, "_CONN", sentinel)
+    assert gcs_tools._persistent_conn() is sentinel
+
+
+@pytest.mark.policy
+def test_reset_connection_closes_and_forgets(monkeypatch):
+    fake = _FakeConn()
+    monkeypatch.setattr(gcs_tools, "_CONN", fake)
+    gcs_tools.reset_connection()
+    assert fake.closed is True
+    assert gcs_tools._CONN is None
