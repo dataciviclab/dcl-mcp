@@ -284,6 +284,21 @@ def _columns_index_text(columns: list[dict[str, Any]] | None) -> tuple[str, str]
     return f"{names} {descs}".strip(), sem
 
 
+def _period_years(period: Any) -> tuple[int | None, int | None]:
+    """Anni da un `period` dell'artifact (dict o stringa "2018–2025")."""
+    if isinstance(period, dict):
+        return period.get("start"), period.get("end")
+    text = str(period or "")
+    match = re.search(r"((?:19|20)\d{2})\D+((?:19|20)\d{2})", text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    single = re.search(r"((?:19|20)\d{2})", text)
+    if single:
+        year = int(single.group(1))
+        return year, year
+    return None, None
+
+
 def _dataset_decision_fields(ds: dict[str, Any]) -> dict[str, Any]:
     """Campi che servono a scegliere tra candidati senza aprire la card.
 
@@ -315,7 +330,7 @@ def search_index(
     """Ranked cross-entity search over a topic_index dict.
 
     entity_type: dataset | repo | domain | source | analysis | None (all)
-    Returns items: {type, slug, name, parent_repo, parent_domain, score, stage?}
+    Returns items: {type, slug, name, parent_repo, parent_domain, score, gcs_available?}
 
     ``limit=None`` restituisce **tutti** i match: serve a ``find`` per
     riportare il totale reale prima di tagliare (prima ``total_catalog``
@@ -346,7 +361,6 @@ def search_index(
             {
                 "slug": slug,
                 "name": ds.get("name") or slug,
-                "stage": ds.get("stage") or meta.get("stage"),
                 "source_id": ds.get("source_id") or meta.get("source_id"),
                 "registry_source": ds.get("registry_source") or meta.get("registry_source") or "",
                 "domain": meta.get("domain"),
@@ -395,7 +409,7 @@ def search_index(
                     "name": ds.get("name"),
                     "parent_repo": ds.get("registry_source") or "",
                     "parent_domain": d_domain,
-                    "stage": ds.get("stage"),
+                    "gcs_available": bool((ds.get("location") or {}).get("path")),
                     "score": score,
                     **_dataset_decision_fields(ds),
                 }
@@ -536,15 +550,21 @@ def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> d
     by_repo = topic_index.get("by_repo") or {}
     by_slug = topic_index.get("by_slug") or {}
 
+    # Accessibilità reale: `stage` era editoriale e stale (33 "published" su 547,
+    # mentre 536 hanno un parquet leggibile). Qui conta il parquet.
+    with_gcs = {
+        ds["slug"]
+        for ds in flatten_datasets(topic_index.get("datasets") or {})
+        if ds.get("slug") and (ds.get("location") or {}).get("path")
+    }
+
     # Con domain= i totali sono quelli del dominio: prima restavano globali
     # (1 dominio, 6 repo, ma "datasets: 468") e si contraddicevano con la
     # vista filtrata.
     domain_slugs = (by_domain.get(domain) or []) if domain else []
     if domain:
         total_datasets = len(domain_slugs)
-        published = sum(
-            1 for s in domain_slugs if (by_slug.get(s) or {}).get("stage") == "published"
-        )
+        accessible = sum(1 for s in domain_slugs if s in with_gcs)
         analyses_by_dataset = topic_index.get("analyses_by_dataset") or {}
         n_analyses = len(
             {a for s in domain_slugs for a in (analyses_by_dataset.get(s) or [])}
@@ -555,7 +575,7 @@ def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> d
             if by_repo
             else sum(len(v) for v in by_slug.values())
         )
-        published = sum(1 for m in by_slug.values() if m.get("stage") == "published")
+        accessible = sum(1 for s in by_slug if s in with_gcs)
         n_analyses = len(topic_index.get("analyses") or [])
 
     domain_nodes: list[dict[str, Any]] = []
@@ -583,7 +603,9 @@ def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> d
                 "role": card.get("role"),
                 "domain": card.get("domain"),
                 "n_datasets": card.get("n_datasets") or len(by_repo.get(name) or []),
-                "n_published": card.get("n_published", 0),
+                "n_with_gcs": sum(
+                    1 for s in (by_repo.get(name) or []) if s in with_gcs
+                ),
                 "sources": card.get("sources") or [],
             }
         )
@@ -609,7 +631,7 @@ def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> d
             "repos": len(repo_nodes),
             "domains": len(domain_nodes),
             "datasets": total_datasets,
-            "published": published,
+            "with_gcs": accessible,
             "analyses": n_analyses,
         },
         "ok": True,
@@ -656,13 +678,32 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
     by_repo = topic_index.get("by_repo") or {}
     by_domain = topic_index.get("by_domain") or {}
 
+    # Indice delle voci complete + set dei dataset con parquet leggibile:
+    # una scan per chiamata, riusata da card, conteggi e join.
+    entry_by_slug = {
+        ds["slug"]: ds for ds in flatten_datasets(datasets_by_source) if ds.get("slug")
+    }
+    with_gcs = {
+        slug
+        for slug, entry in entry_by_slug.items()
+        if (entry.get("location") or {}).get("path")
+    }
+
+    def _list_block(slugs: list[str]) -> dict[str, Any]:
+        """Lista con taglio dichiarato: prima 50 su 169 sembravano 50 in tutto."""
+        return {
+            "datasets": slugs[:50],
+            "datasets_total": len(slugs),
+            "truncated": len(slugs) > 50,
+        }
+
+    def _n_with_gcs(slugs: list[str]) -> int:
+        return sum(1 for slug in slugs if slug in with_gcs)
+
     def _full_entry(slug: str) -> dict[str, Any] | None:
-        # by_slug ha la anagrafica; columns/location vivono solo nella voce
-        # completa di datasets (una scan per explore è accettabile: ~400 voci).
-        for ds in flatten_datasets(datasets_by_source):
-            if ds.get("slug") == slug:
-                return ds
-        return None
+        # Indice costruito una volta per chiamata (prima era una scan per
+        # ogni _full_entry: explore ne fa più di una).
+        return entry_by_slug.get(slug)
 
     def _dataset_card(slug: str) -> dict[str, Any] | None:
         # by_slug is always built from the same flat list as datasets
@@ -674,7 +715,6 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             "type": "dataset",
             "slug": slug,
             "name": meta.get("name") or slug,
-            "stage": meta.get("stage"),
             "source_id": meta.get("source_id"),
             "registry_source": meta.get("registry_source") or "",
             "domain": meta.get("domain"),
@@ -690,6 +730,15 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         card.update(dataset_snapshot(full))
         if full.get("description"):
             card["description"] = full["description"]
+        # Provenienza della fonte (il campo `source` è nell'artifact ma non
+        # veniva esposto) e pagina pubblica del dataset (`url_slug`).
+        if full.get("source"):
+            card["source"] = full["source"]
+        if full.get("url_slug"):
+            card["url"] = f"https://dataciviclab.github.io/data-explorer/dataset/{full['url_slug']}"
+        # Accessibilità reale: `stage` non dice se il parquet si può leggere
+        # (503 dataset `incubating` sono interrogabili). Questo sì.
+        card["gcs_available"] = bool((full.get("location") or {}).get("path"))
         period = full.get("period") or {}
         if period.get("start") or period.get("end"):
             card["period"] = period
@@ -701,6 +750,12 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         # #443). Per numeri citabili usare count(*) via gcs_query.
         if full.get("clean_rows"):
             card["clean_rows"] = full["clean_rows"]
+            # Cosa significa il numero: su un glob è l'ultimo file annuale,
+            # non la serie. Il nome del campo da solo lo faceva sembrare un
+            # totale (audit F10: fino a 12× di scarto).
+            card["clean_rows_scope"] = (
+                "last_year_of_multi_file" if card.get("multi_file") else "single_file"
+            )
             card["clean_rows_note"] = (
                 "Righe dell'ultimo snapshot clean pubblicato dal producer. "
                 "Non è garantito sia la serie completa — per un numero "
@@ -719,12 +774,31 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                 for c in columns
                 if isinstance(c, dict)
             ]
+            card["n_columns"] = len(card["columns"])
         gcs_path = (full.get("location") or {}).get("path") or ""
         if gcs_path:
             card["gcs_path"] = gcs_path
             card["query_hint"] = (
                 f'gcs_query(slug="{slug}", sql="SELECT count(*) AS n FROM _data")'
             )
+        # Collegamenti: i due dataset più joinabili. Costo già pagato
+        # dall'indice; evita all'agente la domanda "con cosa lo unisco?"
+        # come chiamata separata (è ciò che fa join_suggestions).
+        try:
+            from dcl_mcp.context.joins import join_suggestions as _join
+
+            pairs = _join(topic_index, slug, limit=2).get("suggestions") or []
+        except Exception:  # un join mancante non deve rompere la card
+            pairs = []
+        if pairs:
+            card["joins"] = [
+                {
+                    "slug": pair.get("slug"),
+                    "keys": [key.get("type") for key in pair.get("on") or []],
+                    "years_overlap": pair.get("years_overlap"),
+                }
+                for pair in pairs
+            ]
         return card
 
     # Dataset
@@ -791,9 +865,11 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                 "description": card.get("description", ""),
                 "url": card.get("url", ""),
                 "n_datasets": card.get("n_datasets") or len(ds_slugs),
-                "n_published": card.get("n_published", 0),
+                # `n_published` del builder diceva 0 su repo con 15 dataset su
+                # GCS: sostituito dal conteggio reale dei parquet leggibili.
+                "n_with_gcs": _n_with_gcs(ds_slugs),
                 "sources": card.get("sources") or [],
-                "datasets": ds_slugs[:50],
+                **_list_block(ds_slugs),
                 "found": True,
             }
         )
@@ -817,8 +893,11 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                 "name": domain_key.get("name"),
                 "description": domain_key.get("description", ""),
                 "repos": domain_key.get("repos") or [],
-                "datasets": ds_slugs[:50],
+                # `dataset_count` veniva dal builder; il numero di elementi
+                # restituiti era 50 senza dirlo.
                 "dataset_count": domain_key.get("dataset_count") or len(ds_slugs),
+                "n_with_gcs": _n_with_gcs(ds_slugs),
+                **_list_block(ds_slugs),
                 "found": True,
             }
         )
@@ -841,7 +920,7 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                         "slug": source_key,
                         "name": source_key,
                         "n_datasets": len(source_ds),
-                        "datasets": sorted(source_ds)[:50],
+                        **_list_block(sorted(source_ds)),
                         "found": True,
                     }
                 )
@@ -858,7 +937,7 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                     "slug": ref,
                     "name": ref,
                     "n_datasets": len(source_ds),
-                    "datasets": sorted(source_ds)[:50],
+                    **_list_block(sorted(source_ds)),
                     "found": True,
                 }
             )
@@ -877,6 +956,8 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                         "description": a.get("description", ""),
                         "source": a.get("source", ""),
                         "period": a.get("period"),
+                        "year_min": _period_years(a.get("period"))[0],
+                        "year_max": _period_years(a.get("period"))[1],
                         "datasets": a.get("datasets") or [],
                         "found": True,
                     }

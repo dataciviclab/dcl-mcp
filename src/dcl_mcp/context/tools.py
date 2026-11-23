@@ -297,6 +297,15 @@ def explore(ref: str) -> dict[str, object]:
                 columns = describe_parquet_columns(resolved["read_paths"])
             if columns:
                 content["columns"] = columns
+                content["n_columns"] = len(columns)
+                # Onestà: le colonne del mart vengono dal DESCRIBE del parquet,
+                # che non porta role/semantic_type. Senza dirlo, l'agente
+                # presume che valgano come quelle del clean.
+                if not any("role" in column for column in columns):
+                    content["columns_note"] = (
+                        "Colonne dal parquet (DESCRIBE): solo nome e tipo. "
+                        "role e semantic_type non sono disponibili per i mart."
+                    )
                 if detail and detail.get("primary_key"):
                     content["primary_key"] = detail["primary_key"]
                 content.pop("note", None)

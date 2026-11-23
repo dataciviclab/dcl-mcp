@@ -77,14 +77,13 @@ def resolve_clean(topic_index: dict[str, Any], slug: str) -> dict[str, Any]:
     path = location.get("path") or ""
     if not path:
         raise GcsResolveError(
-            f"Dataset '{slug}' senza location GCS (stage={ds.get('stage')}, "
-            "forse non ancora pubblicato)."
+            f"Dataset '{slug}' senza location GCS: non è mai stato pubblicato "
+            "su GCS (nessun parquet da leggere)."
         )
     return {
         "slug": slug,
         "layer": "clean",
         "name": ds.get("name") or slug,
-        "stage": ds.get("stage"),
         "registry_source": ds.get("registry_source") or "",
         "gs_path": path,
         "read_paths": to_read_paths(path),

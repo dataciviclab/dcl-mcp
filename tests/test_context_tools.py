@@ -227,7 +227,7 @@ def test_explore_dataset_repo_domain_not_found():
     assert card["repo"]["role"] == "dati"
 
     repo = context_tools.explore(ref="rifiuti-urbani")["content"]
-    assert repo["type"] == "repo" and repo["n_published"] == 1
+    assert repo["type"] == "repo" and repo["n_with_gcs"] == 1
 
     dom = context_tools.explore(ref="territorio-ambiente")["content"]
     assert dom["type"] == "domain" and "ispra_ru_base" in dom["datasets"]

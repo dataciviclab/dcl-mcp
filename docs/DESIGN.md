@@ -33,6 +33,14 @@ discussion, e i parquet pubblici su GCS via DuckDB.
   lo committa, coincide con lo slug `dataset__table` (mai col nome del dataset
   padre, che rendeva indistinguibili i mart dello stesso dataset).
 
+## `stage` non è esposto
+
+`stage` (`published` / `incubating`) è un campo editoriale del builder, non uno
+stato tecnico: alla data dell'audit copriva 33 dataset su 547, mentre **536**
+avevano un parquet leggibile su GCS. Esporlo induceva a scartare dati
+interrogabili. L'accessibilità reale è `gcs_available` (presenza di
+`location.path`); la promozione editoriale resta un fatto dei repo, non del MCP.
+
 ## Provenienza: `as_of` e `snapshot_year`
 
 Ogni risposta databile espone due cose diverse, da non confondere:
