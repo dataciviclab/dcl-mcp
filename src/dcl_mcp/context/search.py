@@ -428,6 +428,27 @@ def _period_years(period: Any) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _column_card(column: dict[str, Any]) -> dict[str, Any]:
+    """Colonna come la vede l'agente: nome, tipo, ruolo e — se c'è — semantica.
+
+    `semantic_type` esiste nell'artifact (`municipality_name`, `cup_code`, …) e
+    dice a cosa serve la colonna: senza, un agente deve interrogare il dataset
+    per scoprire che `fin_comune` è un codice DOUBLE e `comune` è il nome
+    (misurato: 83 `gcs_query` e timeout su una domanda PNRR).
+    """
+    card: dict[str, Any] = {
+        "name": column.get("name"),
+        "type": column.get("type"),
+        "role": column.get("role"),
+    }
+    if column.get("semantic_type"):
+        card["semantic_type"] = column["semantic_type"]
+    description = (column.get("description") or "").strip()
+    if description:
+        card["description"] = description if len(description) <= 80 else description[:77] + "..."
+    return card
+
+
 def dataset_fields(ds: dict[str, Any]) -> list[tuple[str | None, str]]:
     """Campi su cui `find` cerca un dataset (unica definizione)."""
     col_text, col_sem = _columns_index_text(ds.get("columns"))
@@ -962,11 +983,7 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             card["marts"] = marts
         columns = full.get("columns") or []
         if columns:
-            card["columns"] = [
-                {"name": c.get("name"), "type": c.get("type"), "role": c.get("role")}
-                for c in columns
-                if isinstance(c, dict)
-            ]
+            card["columns"] = [_column_card(c) for c in columns if isinstance(c, dict)]
             card["n_columns"] = len(card["columns"])
         gcs_path = (full.get("location") or {}).get("path") or ""
         if gcs_path:
