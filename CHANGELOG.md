@@ -5,6 +5,20 @@ Storia completa: `git log`.
 
 ## [Unreleased]
 
+### Changed — ricerca
+
+- `find` somma le componenti di punteggio invece di prendere il massimo: un
+  substring accidentale non pareggia più un match coerente.
+- Substring solo ai confini di parola: `cup` non matcha `occupazione`.
+- Credito parziale sui token (2 su 3 non è zero) e peso **IDF** dal catalogo:
+  `italiano` (3 dataset) non obbliga più la ricerca quanto `cup` (16).
+- Alias curati (`disabilità`→`invalidi`, `europei`→`eu`, `fondi`→`finanziamenti`…).
+- Soglia minima (8) e `hint` quando non c'è match forte: meglio zero risultati
+  dichiarati che dieci casuali.
+- Ogni risultato dataset porta `matched` (quali campi hanno fatto match).
+- Stopword articolate mancanti (`della`, `nella`, `sulla`, `dalla`, `alla`…):
+  una preposizione azzerava la query.
+
 ### Changed
 
 - `workspace_triage(section="registry")` è **compatto per default**: niente

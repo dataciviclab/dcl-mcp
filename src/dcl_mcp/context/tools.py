@@ -19,6 +19,7 @@ from dcl_mcp.context import fetch as ctx_fetch
 from dcl_mcp.context.search import (
     ENTITY_TYPES,
     dataset_listing,
+    dataset_matched_fields,
     explore_ref,
     lab_map_summary,
     normalize_entity_type,
@@ -278,11 +279,26 @@ def find(
         # del repo), agganciato qui per non obbligare l'agente a incrociare
         # `workspace_triage(section="registry")` con 547 `explore`.
         signals = signal_index(ctx_fetch.load_triage())
+        entries = {
+            d["slug"]: d
+            for d in (ds for v in (data.get("datasets") or {}).values() for ds in v)
+            if d.get("slug")
+        }
         for item in results:
+            if item.get("type") == "dataset" and item["slug"] in entries:
+                item["matched"] = dataset_matched_fields(entries[item["slug"]], query)
             if item.get("type") == "dataset":
                 update = signals.get(str(item.get("slug")))
                 if update:
                     item.update(update)
+        if not results:
+            payload_hint = (
+                "Nessun match sopra la soglia. Prova un acronimo del Lab "
+                "(CIG, CUP, NASpI, PNRR) o un termine del catalogo "
+                "(es. 'bandi di gara', 'rifiuti urbani')."
+            )
+        else:
+            payload_hint = None
         payload: dict[str, Any] = {
             "query": query,
             "total_catalog": len(matched),
@@ -290,6 +306,8 @@ def find(
             "results": results,
             "ok": True,
         }
+        if payload_hint:
+            payload["hint"] = payload_hint
         if include_github:
             # Stessa risoluzione del token dei tool github_* (3 env var, .env
             # lazy): prima qui si guardava solo GITHUB_TOKEN.

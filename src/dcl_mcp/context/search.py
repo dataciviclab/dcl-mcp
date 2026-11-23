@@ -7,6 +7,7 @@ del MCP nel repo dcl-mcp (ACB tiene solo i build_*).
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from typing import Any
@@ -98,6 +99,41 @@ _FIELD_TOKEN_WEIGHTS = {"slug": 50, "name": 55, "text": 35, "tag": 28}
 _EXACT_WEIGHTS = {"slug": 100, "name": 80, "text": 40, "tag": 30}
 _SUBSTR_WEIGHTS = {"slug": 80, "name": 60, "text": 30, "tag": 25}
 
+# Sotto questa soglia il match è rumore (es. un solo token su tre, trovato in
+# una descrizione di colonna). Meglio zero risultati con un hint che dieci
+# risultati casuali: l'agente non può distinguerli.
+MIN_SCORE = 12
+
+# Sinonimi/acronimi del vocabolario del Lab. Curati a mano, non un dizionario:
+# servono a far combaciare le parole che un agente usa con quelle del catalogo
+# ("disabilità" ↔ "disabili", "fondi europei" ↔ "eu").
+_ALIASES: dict[str, tuple[str, ...]] = {
+    "disabilita": ("disabili", "invalidi"),
+    "disabile": ("disabili",),
+    "invalidi": ("disabili",),
+    "europei": ("eu", "ue"),
+    "europee": ("eu", "ue"),
+    "europeo": ("eu", "ue"),
+    "europa": ("ue", "eu"),
+    "fondi": ("finanziamenti", "grant"),
+    "finanziamenti": ("fondi", "grant"),
+    "contributi": ("aiuti", "grant"),
+    "aiuti": ("contributi",),
+    "imprese": ("aziende", "societa"),
+    "aziende": ("imprese",),
+    "scuole": ("scuola",),
+    "lavoratori": ("lavoro", "dipendenti"),
+    "occupati": ("occupazione",),
+    "disoccupati": ("disoccupazione",),
+    "stipendi": ("retribuzioni", "salari"),
+    "salari": ("retribuzioni",),
+    "sanita": ("sanitario", "ssn"),
+    "ssn": ("sanitario",),
+    "concorsi": ("reclutamento", "inpa"),
+    "benzina": ("carburanti",),
+    "auto": ("veicoli", "autovetture"),
+}
+
 # Tipi di entità ricercabili: unica fonte per search_index e per la
 # validazione di find(type=). I plurali e "theme" sono alias storici.
 ENTITY_TYPES: tuple[str, ...] = ("dataset", "repo", "domain", "source", "analysis")
@@ -178,6 +214,14 @@ def _tokenize_query(query: str) -> list[str]:
     return tokens
 
 
+def _query_forms(token: str) -> set[str]:
+    """Forme morfologiche del token + alias curati del vocabolario del Lab."""
+    forms = _word_forms(token)
+    for alias in _ALIASES.get(token, ()):
+        forms |= _word_forms(alias)
+    return forms
+
+
 def _word_forms(word: str) -> set[str]:
     """Word plus a light morphological variant (final-vowel strip).
 
@@ -204,63 +248,139 @@ def _token_in_words(token: str, words: list[str], token_forms: set[str]) -> bool
     return False
 
 
+def _phrase_hit(phrase: str, value: str) -> bool:
+    """Substring ai confini di parola: "cup" non matcha "occupazione"."""
+    start = value.find(phrase)
+    while start != -1:
+        before = value[start - 1] if start else " "
+        after_at = start + len(phrase)
+        after = value[after_at] if after_at < len(value) else " "
+        if not before.isalnum() and not after.isalnum():
+            return True
+        start = value.find(phrase, start + 1)
+    return False
+
+
+def _idf_weights(
+    entries: list[dict[str, Any]],
+    tokens: list[str],
+    word_cache: _WordCache,
+) -> dict[str, float]:
+    """Peso dei token dalla frequenza nel catalogo (IDF, lisciato).
+
+    Senza questo, "italiano" (3 dataset) obbligava la ricerca quanto "cup" (16).
+    Ritorna un peso in [1, ~7]: parole rare pesano di più.
+    """
+    if not tokens or not entries:
+        return {token: 1.0 for token in tokens}
+    doc_freq = dict.fromkeys(tokens, 0)
+    for entry in entries:
+        col_text, col_sem = _columns_index_text(entry.get("columns"))
+        text = " ".join(
+            filter(
+                None,
+                [
+                    entry.get("slug"),
+                    entry.get("name"),
+                    entry.get("description"),
+                    " ".join(entry.get("tags") or []),
+                    entry.get("category"),
+                    entry.get("source_id"),
+                    entry.get("registry_source"),
+                    col_text,
+                    col_sem,
+                ],
+            )
+        )
+        words = set(_field_words(text, word_cache))
+        for token in tokens:
+            if _token_in_words(token, list(words), _word_forms(token)):
+                doc_freq[token] += 1
+    n = len(entries)
+    return {
+        token: 1.0 + math.log((n + 1) / (doc_freq[token] + 1)) for token in tokens
+    }
+
+
 def _score_entity(
     query: str,
     fields: list[tuple[str | None, str]],
     word_cache: _WordCache | None = None,
+    idf: dict[str, float] | None = None,
 ) -> int:
     """Score an entity against a query. fields: (value, weight_name).
 
-    Tiers:
-      1. exact whole-query match on a field
-      2. whole-query substring on a field
-      3. all non-stopword tokens match across the entity's fields (cross-field
-         AND) — natural-language queries like "appalti pubblici anac"
+    Tre componenti **sommate** (prima si prendeva il massimo, e un substring
+    accidentale pareggiava un match coerente):
+
+      1. match esatto dell'intera query su un campo;
+      2. occorrenza dell'intera query ai confini di parola;
+      3. copertura dei token, con credito parziale e peso IDF: 2 token su 3
+         valgono ~0,44 del pieno, non zero.
     """
     q = _norm(query)
     if not q:
         return 0
-    score = 0
-    # Length guards: a 1-char query ("e") is a substring of almost everything;
-    # exact match needs at least 2 chars to be meaningful.
+
+    exact = 0
+    phrase = 0
     for value, kind in fields:
         v = _norm(value)
         if not v:
             continue
         if len(q) >= 2 and v == q:
-            score = max(score, _EXACT_WEIGHTS.get(kind, 20))
-        elif len(q) >= 3 and q in v:
-            score = max(score, _SUBSTR_WEIGHTS.get(kind, 15))
+            exact = max(exact, _EXACT_WEIGHTS.get(kind, 20))
+        elif len(q) >= 3 and _phrase_hit(q, v):
+            phrase = max(phrase, _SUBSTR_WEIGHTS.get(kind, 15))
 
+    token_score = 0.0
+    tokens = _tokenize_query(query)
+    if tokens:
+        matched = 0
+        weight_sum = 0.0
+        kinds: dict[str, int] = {}
+        for token in tokens:
+            forms = _query_forms(token)
+            hit_kinds = {
+                kind
+                for value, kind in fields
+                if value and _token_in_words(token, _field_words(value, word_cache), forms)
+            }
+            if hit_kinds:
+                matched += 1
+                weight_sum += (idf or {}).get(token, 1.0)
+                for kind in hit_kinds:
+                    kinds[kind] = kinds.get(kind, 0) + 1
+        if matched:
+            coverage = matched / len(tokens)
+            base = max(_FIELD_TOKEN_WEIGHTS.get(kind, 18) for kind in kinds)
+            # Peso medio su TUTTI i token (non solo quelli trovati): un match
+            # parziale non deve valere quanto uno completo. Esponente 3:
+            # 2/3 → ~0,20 del pieno.
+            avg_idf = weight_sum / len(tokens)
+            token_score = base * (coverage**3) * avg_idf
+            if matched == len(tokens) and len(tokens) > 1:
+                # copertura piena su più token: premia la coerenza (non su una
+                # query di un solo token, dove il bonus appiattisce tutto)
+                token_score += 20.0
+
+    return int(round(min(exact + 0.6 * phrase + token_score, 400)))
+
+
+def _matched_fields(query: str, fields: list[tuple[str | None, str]]) -> list[str]:
+    """Quali campi hanno fatto match (per rendere la risposta spiegabile)."""
     tokens = _tokenize_query(query)
     if not tokens:
-        return score
-    token_forms_list = [_word_forms(t) for t in tokens]
-    # Tokenize each field once per entity (not once per token×field). Empty
-    # fields are dropped so they are never re-scanned. The shared word_cache
-    # dedupes identical field values across entities in one search.
-    prepared = []
+        return []
+    found: list[str] = []
     for value, kind in fields:
         if not value:
             continue
-        words = _field_words(value, word_cache)
-        if words:
-            prepared.append((kind, words))
-    matched_kinds: set[str] = set()
-    all_matched = True
-    for tok, tok_forms in zip(tokens, token_forms_list):
-        token_hit = False
-        for kind, words in prepared:
-            if _token_in_words(tok, words, tok_forms):
-                matched_kinds.add(kind)
-                token_hit = True
-        if not token_hit:
-            all_matched = False
-            break
-    if all_matched and matched_kinds:
-        best = max(_FIELD_TOKEN_WEIGHTS.get(kind, 18) for kind in matched_kinds)
-        score = max(score, best)
-    return score
+        words = _field_words(value)
+        if any(_token_in_words(token, words, _query_forms(token)) for token in tokens):
+            if kind not in found:
+                found.append(kind)
+    return found
 
 
 def _columns_index_text(columns: list[dict[str, Any]] | None) -> tuple[str, str]:
@@ -306,6 +426,27 @@ def _period_years(period: Any) -> tuple[int | None, int | None]:
         year = int(single.group(1))
         return year, year
     return None, None
+
+
+def dataset_fields(ds: dict[str, Any]) -> list[tuple[str | None, str]]:
+    """Campi su cui `find` cerca un dataset (unica definizione)."""
+    col_text, col_sem = _columns_index_text(ds.get("columns"))
+    return [
+        (ds.get("slug"), "slug"),
+        (ds.get("name"), "name"),
+        (ds.get("source_id"), "tag"),
+        (ds.get("category"), "tag"),
+        (ds.get("registry_source"), "tag"),
+        (ds.get("description"), "text"),
+        (" ".join(ds.get("tags") or []), "tag"),
+        (col_text, "text"),
+        (col_sem, "tag"),
+    ]
+
+
+def dataset_matched_fields(entry: dict[str, Any], query: str) -> list[str]:
+    """Quali campi hanno fatto match, per rendere il risultato spiegabile."""
+    return _matched_fields(query, dataset_fields(entry))[:4]
 
 
 def _dataset_decision_fields(ds: dict[str, Any]) -> dict[str, Any]:
@@ -385,6 +526,9 @@ def search_index(
             }
         )
 
+    tokens = _tokenize_query(query)
+    idf = _idf_weights(dataset_entries, tokens, word_cache)
+
     if type_filter in (None, "dataset"):
         for ds in dataset_entries:
             col_text, col_sem = _columns_index_text(ds.get("columns"))
@@ -405,6 +549,7 @@ def search_index(
                     (col_sem, "tag"),
                 ],
                 word_cache,
+                idf,
             )
             if score <= 0:
                 continue
@@ -437,6 +582,7 @@ def search_index(
                     (card.get("domain"), "tag"),
                 ],
                 word_cache,
+                idf,
             )
             if score <= 0:
                 continue
@@ -468,6 +614,7 @@ def search_index(
                     (dom.get("description"), "text"),
                 ],
                 word_cache,
+                idf,
             )
             if score <= 0:
                 continue
@@ -496,6 +643,7 @@ def search_index(
                     (a.get("source"), "tag"),
                 ],
                 word_cache,
+                idf,
             )
             if score <= 0:
                 continue
@@ -545,6 +693,7 @@ def search_index(
                 }
             )
 
+    results = [r for r in results if r.get("score", 0) >= MIN_SCORE]
     results.sort(key=lambda r: (-r.get("score", 0), r.get("slug") or ""))
     if limit is None:
         return results
