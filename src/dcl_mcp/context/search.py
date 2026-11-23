@@ -816,15 +816,16 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
             card["query_hint"] = (
                 f'gcs_query(slug="{slug}", sql="SELECT count(*) AS n FROM _data")'
             )
-        # Collegamenti: i due dataset più joinabili. Costo già pagato
-        # dall'indice; evita all'agente la domanda "con cosa lo unisco?"
-        # come chiamata separata (è ciò che fa join_suggestions).
+        # Collegamenti: i due dataset più joinabili sono un assaggio; la lista
+        # completa (con type_mismatch) è di join_suggestions, e `joins_total`
+        # dice quanti candidati restano.
         try:
             from dcl_mcp.context.joins import join_suggestions as _join
 
-            pairs = _join(topic_index, slug, limit=2).get("suggestions") or []
+            join_result = _join(topic_index, slug, limit=2)
         except Exception:  # un join mancante non deve rompere la card
-            pairs = []
+            join_result = {}
+        pairs = join_result.get("suggestions") or []
         if pairs:
             card["joins"] = [
                 {
@@ -834,6 +835,7 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
                 }
                 for pair in pairs
             ]
+            card["joins_total"] = join_result.get("total_candidates", len(pairs))
         return card
 
     # Dataset

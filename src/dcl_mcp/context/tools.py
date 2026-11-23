@@ -28,7 +28,11 @@ from dcl_mcp.provenance import catalog_meta, signal_index
 
 
 @mcp.tool(
-    description="Quick orientation — compact markdown overview of Lab state.",
+    description=(
+        "Quick orientation — compact markdown overview of Lab state. "
+        "Narrative entry point: for numbers and structure use workspace_triage "
+        "and lab_map."
+    ),
     structured_output=True,
 )
 def session_bootstrap() -> dict[str, object]:
@@ -49,7 +53,8 @@ def session_bootstrap() -> dict[str, object]:
 
 @mcp.tool(
     description=(
-        "Machine-readable Lab state. Default: compact summary. "
+        "Machine-readable Lab state (numbers and lists). Default: compact "
+        "summary. For the narrative overview use session_bootstrap. "
         "Use section= to get a specific part: radar, prs, issues, "
         "discussions, registry, git, warnings. "
         "registry is compact by default (per-repo counts + updated_at); "
@@ -228,7 +233,8 @@ def join_suggestions(
         "pipeline freshness (last_run, run_year, repo_updated_at): enough "
         "to choose and to judge staleness without explore(). The payload has "
         "as_of (catalog build time, not data freshness). "
-        "Use explore(ref) for details. "
+        "Repo/domain/source results are compact: use explore(ref) for their "
+        "card. Use explore(ref) for details. "
         "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs whose "
         "title contains all query tokens, and top open Discussions of the org "
         "on the same query."
@@ -303,7 +309,9 @@ def find(
         "source id, or analysis slug. Returns card + children + routing hints. "
         "The payload has as_of (catalog build time); a dataset/mart card has "
         "snapshot_year (year of the published GCS file, if in the path) and "
-        "the pipeline freshness (last_run, run_year, repo_updated_at)."
+        "the pipeline freshness (last_run, run_year, repo_updated_at) and a "
+        "`joins` teaser (top 2, with joins_total): the full ranked list with "
+        "type_mismatch comes from join_suggestions(slug)."
     ),
     structured_output=True,
 )

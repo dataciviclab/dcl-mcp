@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from dcl_mcp.context.search import search_index
+from dcl_mcp.context.search import explore_ref, search_index
 from dcl_mcp.provenance import catalog_meta, dataset_snapshot, signal_index, snapshot_year
 
 pytestmark = pytest.mark.pure_unit
@@ -80,6 +80,53 @@ def test_signal_index_from_registry_summary():
     }
     assert index["pensioni_pa_dag"]["last_run"] is None
     assert signal_index(None) == {}
+
+
+def test_dataset_card_joins_is_a_teaser():
+    """La card dà i primi 2 join e dice quanti sono in totale."""
+    index = {
+        "by_slug": {"a": {}, "b": {}, "c": {}},
+        "datasets": {
+            "s1": [
+                {
+                    "slug": "a",
+                    "name": "A",
+                    "registry_source": "r",
+                    "period": {"start": 2020, "end": 2024},
+                    "columns": [
+                        {"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}
+                    ],
+                }
+            ],
+            "s2": [
+                {
+                    "slug": "b",
+                    "name": "B",
+                    "registry_source": "r",
+                    "period": {"start": 2020, "end": 2024},
+                    "columns": [
+                        {"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}
+                    ],
+                }
+            ],
+            "s3": [
+                {
+                    "slug": "c",
+                    "name": "C",
+                    "registry_source": "r",
+                    "period": {"start": 2021, "end": 2024},
+                    "columns": [
+                        {"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}
+                    ],
+                }
+            ],
+        },
+        "repos": {},
+        "domains": [],
+    }
+    card = explore_ref(index, "a")
+    assert [pair["slug"] for pair in card["joins"]] == ["b", "c"]
+    assert card["joins_total"] == 2
 
 
 def test_dataset_snapshot_from_location():
