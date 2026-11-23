@@ -16,7 +16,7 @@ Storia completa: `git log`.
 
 - `lab_map(view="datasets", domain=)` — enumerazione del catalogo: una riga per
   dataset con `years`, `gcs_available`, `snapshot_year`, `n_columns`,
-  `last_run`, `run_year` (~121 KB per 547, 3 KB per un dominio). Risponde a
+  `last_run`, `run_year` (~121 KB per 547; 2–38 KB per dominio, media ~18 KB). Risponde a
   domande di catalogo ("quali sono obsoleti?") senza un `explore` per dataset:
   nell'audit la stessa domanda costava 1.516–2.606 chiamate con esito
   non deterministico.

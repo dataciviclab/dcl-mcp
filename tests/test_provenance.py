@@ -33,18 +33,50 @@ def test_snapshot_year(path, expected):
 
 
 def test_catalog_meta_carries_as_of_and_schema():
+    from dcl_mcp.context import fetch as ctx_fetch
+
     meta = catalog_meta(
         {"generated_at": "2026-11-23T06:02:34", "schema_version": 7}
     )
     assert meta["as_of"] == "2026-11-23T06:02:34"
     assert meta["schema_version"] == 7
-    assert meta["source"].startswith("agent-context-builder")
+    # La fonte dichiarata segue l'env (ACB_REPO/ACB_BRANCH), non è costante.
+    assert meta["source"] == f"{ctx_fetch.REPO}@{ctx_fetch.BRANCH}"
 
 
 def test_catalog_meta_tolerates_empty_index():
     meta = catalog_meta(None)
     assert meta["as_of"] is None
     assert "schema_version" not in meta
+
+
+def test_signal_index_uses_label_not_prefixed_id():
+    """`id` può essere prefissato (`compose:slug`); la chiave è `label`.
+
+    Regressione: con `id` prima, i 42 dataset compose restavano senza
+    last_run/run_year, proprio quelli la cui freschezza dipende da altri.
+    """
+    triage = {
+        "registry_summary": [
+            {
+                "repo": "appalti-pubblici",
+                "updated_at": "2026-11-22",
+                "signals_detail": [
+                    {
+                        "id": "compose:anac_cross",
+                        "label": "anac_cross",
+                        "run": {"year": 2026, "started_at": "2026-11-16T10:00:00Z"},
+                    },
+                    # senza label: si recupera togliendo il prefisso
+                    {"id": "compose:sentenze_complete", "run": {"year": 2025}},
+                ],
+            }
+        ]
+    }
+    index = signal_index(triage)
+    assert index["anac_cross"]["run_year"] == 2026
+    assert index["sentenze_complete"]["run_year"] == 2025
+    assert "compose:anac_cross" not in index
 
 
 def test_signal_index_from_registry_summary():

@@ -143,7 +143,7 @@ def workspace_triage(
         "returns ok=false with the list of valid domain slugs. "
         "view='datasets' returns one row per dataset (slug, name, years, "
         "gcs_available, snapshot_year, n_columns, last_run, run_year) — "
-        "~110 KB for all 547, use domain= to shrink it: use it to enumerate "
+        "~120 KB for all 547; use domain= to shrink it (2-38 KB): use it to enumerate "
         "the catalog instead of calling explore on every dataset."
     ),
     structured_output=True,

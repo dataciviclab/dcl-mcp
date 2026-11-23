@@ -94,6 +94,11 @@ async def _check() -> dict[str, Any]:
             row = rows[0]
             assert {"slug", "years", "gcs_available", "n_columns"} <= set(row)
             assert "stage" not in row
+            # Freschezza agganciata anche ai dataset compose: `label` e non
+            # `id` prefissato (`compose:slug`). Con `id` erano 505/547.
+            fresh = sum(1 for r in rows if r.get("last_run"))
+            assert fresh > 530, f"last_run solo su {fresh}/{len(rows)}"
+            report["with_last_run"] = fresh
             report["datasets"] = len(rows)
             report["listing_kb"] = len(json.dumps(listing)) // 1024
 
