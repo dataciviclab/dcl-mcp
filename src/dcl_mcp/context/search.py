@@ -179,13 +179,45 @@ def _deaccent(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
 
 
-# Per-search cache: field value → word list. Passed down through
-# search_index → _score_entity → _token_in_words so each distinct field
-# string is tokenized once per query, not once per (token × entity).
+# Field value → word list. **Persistente tra query**: le stringhe dei campi
+# (slug, tag, descrizioni, nomi colonna) sono content-addressed, quindi la
+# stessa stringa dà sempre le stesse parole. Prima era per-query e ogni
+# chiamata ri-tokenizzava 547 dataset × 9 campi (~6.000 colonne): 150 ms.
 _WordCache = dict[str, list[str]]
+_WORD_CACHE: _WordCache = {}
+_WORD_CACHE_MAX = 200_000
+# value → (words, forme plurali/singolari). Evita di ricreare le forme per ogni
+# (token × parola × campo): era il costo residuo di `find` (~100 ms).
+_FIELD_FORMS: dict[str, tuple[list[str], frozenset[str]]] = {}
 
 
-def _field_words(value: str | None, cache: _WordCache | None = None) -> list[str]:
+def _field_index(value: str, cache: _WordCache | None = None) -> tuple[list[str], frozenset[str]]:
+    """Parole del campo + unione delle loro forme, calcolate una volta sola."""
+    hit = _FIELD_FORMS.get(value)
+    if hit is not None:
+        return hit
+    words = _field_words(value, cache)
+    forms = frozenset(form for word in words for form in _word_forms(word))
+    if len(_FIELD_FORMS) > _WORD_CACHE_MAX:
+        _FIELD_FORMS.clear()
+    entry = (words, forms)
+    _FIELD_FORMS[value] = entry
+    return entry
+
+
+def _value_matches(
+    token: str, token_forms: set[str], value: str, cache: _WordCache | None = None
+) -> bool:
+    """Il token compare nel valore? Forme complete, poi prefisso di parola."""
+    words, forms = _field_index(value, cache)
+    if token_forms & forms:
+        return True
+    return len(token) >= 3 and any(word.startswith(token) for word in words)
+
+
+def _field_words(
+    value: str | None, cache: _WordCache | None = None
+) -> list[str]:
     """Lowercase alphanumeric words; underscores/punctuation are separators.
 
     Makes snake_case slugs word-matchable: "anac_bandi_gara" →
@@ -194,12 +226,15 @@ def _field_words(value: str | None, cache: _WordCache | None = None) -> list[str
     """
     if value is None:
         return []
-    if cache is not None and value in cache:
+    if cache is None:
+        cache = _WORD_CACHE
+        if len(cache) > _WORD_CACHE_MAX:  # guardia: non cresce senza limite
+            cache.clear()
+    if value in cache:
         return cache[value]
     v = _deaccent(_norm(value))
     words = [w for w in re.split(r"[^a-z0-9]+", v) if w]
-    if cache is not None:
-        cache[value] = words
+    cache[value] = words
     return words
 
 
@@ -274,27 +309,11 @@ def _idf_weights(
     if not tokens or not entries:
         return {token: 1.0 for token in tokens}
     doc_freq = dict.fromkeys(tokens, 0)
+    forms_by_token = {token: _word_forms(token) for token in tokens}
     for entry in entries:
-        col_text, col_sem = _columns_index_text(entry.get("columns"))
-        text = " ".join(
-            filter(
-                None,
-                [
-                    entry.get("slug"),
-                    entry.get("name"),
-                    entry.get("description"),
-                    " ".join(entry.get("tags") or []),
-                    entry.get("category"),
-                    entry.get("source_id"),
-                    entry.get("registry_source"),
-                    col_text,
-                    col_sem,
-                ],
-            )
-        )
-        words = set(_field_words(text, word_cache))
+        values = [value for value, _kind in dataset_fields(entry) if value]
         for token in tokens:
-            if _token_in_words(token, list(words), _word_forms(token)):
+            if any(_value_matches(token, forms_by_token[token], value, word_cache) for value in values):
                 doc_freq[token] += 1
     n = len(entries)
     return {
@@ -344,7 +363,7 @@ def _score_entity(
             hit_kinds = {
                 kind
                 for value, kind in fields
-                if value and _token_in_words(token, _field_words(value, word_cache), forms)
+                if value and _value_matches(token, forms, value, word_cache)
             }
             if hit_kinds:
                 matched += 1
@@ -376,8 +395,7 @@ def _matched_fields(query: str, fields: list[tuple[str | None, str]]) -> list[st
     for value, kind in fields:
         if not value:
             continue
-        words = _field_words(value)
-        if any(_token_in_words(token, words, _query_forms(token)) for token in tokens):
+        if any(_value_matches(token, _query_forms(token), value) for token in tokens):
             if kind not in found:
                 found.append(kind)
     return found
@@ -509,9 +527,9 @@ def search_index(
     """
     results: list[dict[str, Any]] = []
     type_filter = normalize_entity_type(entity_type)
-    # Shared word cache for the whole query: identical field values (e.g.
-    # source_id "anac" repeated across 9 datasets) tokenize once.
-    word_cache: _WordCache = {}
+    # Cache persistente delle parole (vedi _WORD_CACHE): le stringhe dei campi
+    # sono le stesse a ogni query finché l'artifact non cambia.
+    word_cache: _WordCache = _WORD_CACHE
 
     by_slug = topic_index.get("by_slug") or {}
     datasets_by_source = topic_index.get("datasets") or {}
