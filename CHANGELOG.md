@@ -7,6 +7,17 @@ Storia completa: `git log`.
 
 ### Added
 
+- Provenienza strutturata: `as_of` (quando è stato costruito il catalogo) e
+  `source` in `find`, `explore`, `lab_map`, `join_suggestions`, `gcs_query`,
+  `workspace_triage`, `session_bootstrap`; `snapshot_year` (anno del file
+  pubblicato su GCS) nelle card dataset/mart e in `gcs_query`.
+  Motivo: senza data l'agente non può citare un risultato né dire se un dataset
+  è aggiornato (audit usabilità 2026-11-23, F8/F10; R02: 1.772 chiamate e
+  timeout su una domanda senza criterio di stop).
+- `find`: ogni risultato dataset porta `snippet`, `years`, `n_columns`,
+  `n_marts`, `snapshot_year` — bastano a scegliere senza un `explore` per
+  candidato (audit F5: 34–74 explore per task).
+
 - `join_suggestions(slug, limit, min_years, include_names)`: dataset joinabili
   derivati dai `semantic_type` dell'artifact. Coppie di colonne, overlap anni,
   `type_mismatch`; chiavi specifiche prima delle geografiche.

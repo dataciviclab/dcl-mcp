@@ -9,6 +9,7 @@ operativa che si lancia dalla CLI/CI di ACB, non da un MCP per esterni.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from dcl_mcp.app import GITHUB_TOKEN_MISSING, get_http, github_token, mcp
@@ -22,6 +23,7 @@ from dcl_mcp.context.search import (
 )
 from dcl_mcp.discussions.client import search_org_discussions
 from dcl_mcp.guards import guard_ok
+from dcl_mcp.provenance import catalog_meta
 
 
 @mcp.tool(
@@ -31,7 +33,15 @@ from dcl_mcp.guards import guard_ok
 def session_bootstrap() -> dict[str, object]:
     def _exec() -> dict[str, object]:
         content = ctx_fetch.fetch("session_bootstrap.md")
-        return {"content": content, "format": "markdown", "ok": True}
+        # `as_of` strutturato: la data c'è già nel markdown, ma un agente che
+        # non lo parsa non può datare la risposta (audit F8).
+        match = re.search(r"\*\*Generated\*\*:\s*(\S+)", content)
+        return {
+            "content": content,
+            "format": "markdown",
+            "as_of": match.group(1) if match else None,
+            "ok": True,
+        }
 
     return guard_ok(_exec, "session_bootstrap")
 
@@ -69,6 +79,7 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
                 "issues": data.get("open_issues") or len(data.get("issues", [])),
                 "discussions": data.get("open_discussions") or len(data.get("discussions", [])),
                 "warnings": data.get("warnings", []),
+                "as_of": data.get("generated_at"),
                 "ok": True,
             }
 
@@ -95,7 +106,7 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
                 "error": f"Sezione '{section}' non valida. Opzioni: {list(sections.keys())}",
             }
 
-        return {"content": extractor(data), "ok": True}
+        return {"content": extractor(data), "as_of": data.get("generated_at"), "ok": True}
 
     return guard_ok(_exec, "workspace_triage")
 
@@ -124,7 +135,7 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
                     "valid_domains": valid,
                 }
         summary = lab_map_summary(data, domain=domain)
-        return {"content": summary, "ok": True}
+        return {"content": summary, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "lab_map")
 
@@ -151,13 +162,15 @@ def join_suggestions(
 
     def _exec() -> dict[str, object]:
         data = ctx_fetch.load_topic_index()
-        return _suggest(
+        result = _suggest(
             data,
             slug,
             limit=limit,
             min_years=min_years,
             include_names=include_names,
         )
+        result.update(catalog_meta(data))
+        return result
 
     return guard_ok(_exec, "join_suggestions")
 
@@ -171,7 +184,11 @@ def join_suggestions(
         "Filters: type= (dataset|repo|domain|source|analysis), domain=, limit=. "
         "Returns type + parent pointers + score; total_catalog is the number "
         "of matches in the catalog, returned is how many you actually see "
-        "(<= limit). Use explore(ref) for details. "
+        "(<= limit). Dataset results also carry snippet, years, n_columns, "
+        "n_marts and snapshot_year (year of the published GCS file): enough "
+        "to choose without explore(). The payload has as_of (catalog build "
+        "time, not data freshness). "
+        "Use explore(ref) for details. "
         "include_github=true (needs GITHUB_TOKEN) adds open issues/PRs whose "
         "title contains all query tokens, and top open Discussions of the org "
         "on the same query."
@@ -226,7 +243,7 @@ def find(
         # total resta la somma esplicita: prima veniva gonfiato in-place e
         # non significava più "match nel catalogo".
         payload["total"] = payload["total_catalog"] + payload.get("total_external", 0)
-        return {"content": payload, "ok": True}
+        return {"content": payload, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "find")
 
@@ -234,7 +251,9 @@ def find(
 @mcp.tool(
     description=(
         "Deep-dive any Lab entity by ref: dataset slug, repo name, domain slug, "
-        "source id, or analysis slug. Returns card + children + routing hints."
+        "source id, or analysis slug. Returns card + children + routing hints. "
+        "The payload has as_of (catalog build time); a dataset/mart card has "
+        "snapshot_year (year of the published GCS file, if in the path)."
     ),
     structured_output=True,
 )
@@ -297,7 +316,7 @@ def explore(ref: str) -> dict[str, object]:
                 # gcs_path/query_hint ereditati dal clean sarebbero sbagliati
                 content.pop("gcs_path", None)
                 content.pop("query_hint", None)
-        return {"content": content, "ok": True}
+        return {"content": content, **catalog_meta(data), "ok": True}
 
     return guard_ok(_exec, "explore")
 

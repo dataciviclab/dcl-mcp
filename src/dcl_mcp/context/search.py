@@ -11,6 +11,8 @@ import re
 import unicodedata
 from typing import Any
 
+from dcl_mcp.provenance import dataset_snapshot
+
 # Function words that pollute natural-language queries ("bandi di gara",
 # "appalti pubblici anac"). Matched after de-accenting, so "piu" covers "più".
 # Curated minimal set — not a full Italian stopword list.
@@ -282,6 +284,27 @@ def _columns_index_text(columns: list[dict[str, Any]] | None) -> tuple[str, str]
     return f"{names} {descs}".strip(), sem
 
 
+def _dataset_decision_fields(ds: dict[str, Any]) -> dict[str, Any]:
+    """Campi che servono a scegliere tra candidati senza aprire la card.
+
+    `find` restituiva solo slug/nome/score: per distinguere due dataset serviva
+    un `explore` per candidato (audit: 34–74 explore per task). Qui passano le
+    informazioni che l'agente usa davvero per decidere.
+    """
+    description = (ds.get("description") or "").strip()
+    period = ds.get("period") or {}
+    fields: dict[str, Any] = {
+        "n_columns": len(ds.get("columns") or []),
+        "n_marts": len(ds.get("mart_refs") or []),
+        "snapshot_year": dataset_snapshot(ds)["snapshot_year"],
+    }
+    if description:
+        fields["snippet"] = description if len(description) <= 160 else description[:157] + "..."
+    if period.get("start") or period.get("end"):
+        fields["years"] = {"start": period.get("start"), "end": period.get("end")}
+    return fields
+
+
 def search_index(
     topic_index: dict[str, Any],
     query: str,
@@ -331,6 +354,11 @@ def search_index(
                 "tags": ds.get("tags") or meta.get("tags"),
                 "description": ds.get("description") or meta.get("description"),
                 "columns": ds.get("columns") or meta.get("columns"),
+                # Campi per far decidere l'agente senza un `explore` per
+                # candidato (audit: 74 explore su 128 chiamate in D01).
+                "period": ds.get("period"),
+                "mart_refs": ds.get("mart_refs"),
+                "location": ds.get("location"),
             }
         )
 
@@ -369,6 +397,7 @@ def search_index(
                     "parent_domain": d_domain,
                     "stage": ds.get("stage"),
                     "score": score,
+                    **_dataset_decision_fields(ds),
                 }
             )
 
@@ -655,6 +684,10 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         # Enrichment per il passaggio explore → gcs_query: campi che servono
         # "prima di scrivere SQL" (backward-compatible, additivi).
         full = _full_entry(slug) or {}
+        # Provenienza: anno dello snapshot pubblicato, dal path della location.
+        # Senza, l'agente non può dire se un dataset è aggiornato (R02: 1.772
+        # chiamate per una risposta che il sistema non permetteva).
+        card.update(dataset_snapshot(full))
         if full.get("description"):
             card["description"] = full["description"]
         period = full.get("period") or {}

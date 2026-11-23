@@ -17,6 +17,7 @@ from dcl_mcp.app import mcp
 from dcl_mcp.context.fetch import load_topic_index
 from dcl_mcp.gcs.resolver import GcsResolveError, resolve, validate_sql
 from dcl_mcp.guards import guard_ok
+from dcl_mcp.provenance import catalog_meta, snapshot_year
 
 _MAX_LIMIT = 500
 _DEFAULT_LIMIT = 100
@@ -57,6 +58,8 @@ def _run_query(read_paths: list[str], sql: str, limit: int) -> tuple[list[str], 
         "(es. SELECT anno, count(*) FROM _data GROUP BY anno); sono ammesse "
         "anche CTE (WITH … SELECT). "
         "Una sola istruzione, limit= max righe in output (default 100, max 500). "
+        "La risposta riporta snapshot_year (anno del file letto) e as_of "
+        "(quando è stato costruito il catalogo): servono a datare un numero. "
         "Scopri gli slug con find()/explore() — explore restituisce anche "
         "columns e gcs_path. Serve solo per i dati pubblicati: per "
         "raw/contratti/pipeline usa il MCP toolkit."
@@ -97,6 +100,9 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
                 # Stesso nome della card `explore` (era `gs_path` qui e
                 # `gcs_path` là: due nomi per lo stesso dato).
                 "gcs_path": resolved["gs_path"],
+                # Provenienza: catalogo (as_of) e snapshot del file letto.
+                "snapshot_year": snapshot_year(resolved["gs_path"]),
+                **catalog_meta(topic),
                 "columns": columns,
                 "n_rows": len(rows),
                 "limit": safe_limit,
