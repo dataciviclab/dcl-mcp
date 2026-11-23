@@ -541,3 +541,14 @@ def test_reset_connection_closes_and_forgets(monkeypatch):
     gcs_tools.reset_connection()
     assert fake.closed is True
     assert gcs_tools._CONN is None
+
+
+@pytest.mark.policy
+def test_apply_env_delegates_to_lab_connectors(monkeypatch):
+    """I SET da env (DUCKDB_THREADS, …) arrivano alla connessione persistente."""
+    from lab_connectors.duckdb import core as duck_core
+
+    seen = []
+    monkeypatch.setattr(duck_core, "_apply_env_settings", lambda con: seen.append(con))
+    gcs_tools._apply_env(object())
+    assert len(seen) == 1

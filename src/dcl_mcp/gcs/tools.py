@@ -32,6 +32,18 @@ _CONN_LOCK = threading.Lock()
 _CONN: Any = None
 
 
+def _apply_env(con: Any) -> None:
+    """Applica i SET da env di lab-connectors (DUCKDB_THREADS, …).
+
+    `_persistent_conn` ricostruisce `safe_connect` a mano: senza questo, le
+    variabili che il Lab usa per ridurre il picco di memoria non avrebbero
+    effetto proprio sul processo che tiene viva una connessione da 2 GB.
+    """
+    from lab_connectors.duckdb.core import _apply_env_settings
+
+    _apply_env_settings(con)
+
+
 def _persistent_conn() -> Any:
     """Connessione DuckDB condivisa, creata alla prima query.
 
@@ -54,6 +66,7 @@ def _persistent_conn() -> Any:
         con.execute("LOAD httpfs")
         for key, value in GCS_S3_CONFIG.items():
             con.execute(f"SET {key} = '{value}'")
+        _apply_env(con)
         _CONN = con
     return _CONN
 
@@ -95,9 +108,15 @@ def _run_query(read_paths: list[str], sql: str, limit: int) -> tuple[list[str], 
             columns = [d[0] for d in cur.description or []]
             rows = cur.fetchall()
         except Exception as exc:
-            # un errore di rete può lasciare la connessione inutilizzabile:
-            # la prossima chiamata ne crea una nuova (i binder error no).
-            if "IO Error" in str(exc) or "Connection" in str(exc) or "HTTP" in str(exc):
+            # Solo errori di rete/IO invalidano la connessione: un binder error
+            # (colonna sbagliata) non deve far perdere la cache calda. Il test
+            # è sul tipo, non sul testo del messaggio.
+            import duckdb
+
+            if isinstance(
+                exc,
+                (duckdb.IOException, duckdb.HTTPException, duckdb.ConnectionException),
+            ):
                 reset_connection()
             raise
     return columns, [[_json_safe(v) for v in row] for row in rows]

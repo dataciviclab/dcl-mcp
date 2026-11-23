@@ -294,8 +294,11 @@ def find(
         if not results:
             payload_hint = (
                 "Nessun match sopra la soglia. Prova un acronimo del Lab "
-                "(CIG, CUP, NASpI, PNRR) o un termine del catalogo "
-                "(es. 'bandi di gara', 'rifiuti urbani')."
+                "(CIG, CUP, NASpI, PNRR), un termine del catalogo "
+                "(es. 'bandi di gara', 'rifiuti urbani'), oppure — per un "
+                "comune o un territorio — un dataset geografico via explore o "
+                "gcs_query sulle colonne `comune`/`codice_istat`: la ricerca "
+                "testuale non indicizza i nomi dei luoghi."
             )
         else:
             payload_hint = None

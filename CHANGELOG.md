@@ -9,12 +9,16 @@ Storia completa: `git log`.
 
 - `find` somma le componenti di punteggio invece di prendere il massimo: un
   substring accidentale non pareggia più un match coerente.
-- Substring solo ai confini di parola: `cup` non matcha `occupazione`.
+- Substring ai confini di parola sulla query intera: `cup` non matcha
+  `occupazione`. Sui singoli token resta il prefisso di parola (≥3 caratteri),
+  quindi `roma` matcha `romagna`: il confine è sulla query, non sul token.
 - Credito parziale sui token (2 su 3 non è zero) e peso **IDF** dal catalogo:
-  `italiano` (3 dataset) non obbliga più la ricerca quanto `cup` (16).
+  `italiano` (52 dataset) pesa meno di `cup` (16).
 - Alias curati (`disabilità`→`invalidi`, `europei`→`eu`, `fondi`→`finanziamenti`…).
-- Soglia minima (8) e `hint` quando non c'è match forte: meglio zero risultati
-  dichiarati che dieci casuali.
+- Soglia minima **12** (`MIN_SCORE`) e `hint` quando non c'è match forte: meglio
+  zero risultati dichiarati che dieci casuali. Misurata su 10 query reali: con
+  8 o 12 il primo risultato è identico ovunque e le query a zero restano 1; la
+  12 taglia solo la coda (es. `contributi alle imprese`: 46 → 17).
 - Ogni risultato dataset porta `matched` (quali campi hanno fatto match).
 - Stopword articolate mancanti (`della`, `nella`, `sulla`, `dalla`, `alla`…):
   una preposizione azzerava la query.
