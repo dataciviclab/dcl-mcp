@@ -233,9 +233,14 @@ def join_suggestions(
 @mcp.tool(
     description=(
         "Ranked search across datasets, repos, domains, sources, and analyses. "
-        "All query tokens must match (cross-field AND): words may be spread "
-        "across slug, name, tags, description, source_id and column schema "
-        "(names/descriptions/semantic types). "
+        "Matching is weighted, not all-or-nothing: more matched tokens and "
+        "rarer tokens rank higher, and a missing token does not zero the "
+        "result. Words may be spread across slug, name, tags, description, "
+        "source_id and column schema (names/descriptions/semantic types); a "
+        "small alias map covers Lab vocabulary (disabilità→invalidi, "
+        "europei→eu, fondi→finanziamenti). Below a minimum score results are "
+        "dropped and `hint` explains why (text search does not index place "
+        "names: use gcs_query on `comune`/`codice_istat`). "
         "Filters: type= (dataset|repo|domain|source|analysis), domain=, limit=. "
         "Returns type + parent pointers + score; total_catalog is the number "
         "of matches in the catalog, returned is how many you actually see "
