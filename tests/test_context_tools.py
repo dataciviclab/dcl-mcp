@@ -712,3 +712,58 @@ def test_join_suggestions_tool_unknown_slug_is_honest():
     assert result["ok"] is True
     assert result["found"] is False
     assert "non presente" in result["message"]
+
+
+@pytest.mark.contract
+def test_topic_index_is_parsed_once(monkeypatch, sample_index):
+    """La cache dell'oggetto evita json.loads di 2,4 MB a ogni chiamata."""
+    calls = {"n": 0}
+
+    def fake_download(path, retries, backoff, use_cache):
+        calls["n"] += 1
+        body = json.dumps(sample_index)
+        ctx_fetch.artifact_cache.set(path, body)  # come il download reale
+        return body
+
+    monkeypatch.setattr(ctx_fetch, "_download", fake_download)
+    ctx_fetch.artifact_cache.clear()
+    ctx_fetch._parsed.clear()
+
+    first = ctx_fetch.load_topic_index()
+    second = ctx_fetch.load_topic_index()
+
+    assert first is second
+    assert calls["n"] == 1
+
+
+@pytest.mark.contract
+def test_fetch_is_single_flight(monkeypatch, sample_index):
+    """Chiamate concorrenti sullo stesso path: un solo download."""
+    import threading
+    import time as _time
+
+    calls = {"n": 0}
+
+    def slow_download(path, retries, backoff, use_cache):
+        calls["n"] += 1
+        _time.sleep(0.05)
+        body = json.dumps(sample_index)
+        ctx_fetch.artifact_cache.set(path, body)  # come il download reale
+        return body
+
+    monkeypatch.setattr(ctx_fetch, "_download", slow_download)
+    ctx_fetch.artifact_cache.clear()
+    ctx_fetch._parsed.clear()
+
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(ctx_fetch.fetch("topic_index.json")))
+        for _ in range(5)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert calls["n"] == 1
+    assert len(results) == 5

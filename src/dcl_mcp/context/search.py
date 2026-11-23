@@ -33,6 +33,15 @@ _STOPWORDS = frozenset(
         "da",
         "dagli",
         "dai",
+        # forme articolate mancanti: "personale della scuola" tornava 0 perché
+        # "della" non era una stopword (audit search log, 2026-11-23).
+        "dalla",
+        "dallo",
+        "della",
+        "alla",
+        "nella",
+        "nelle",
+        "sulla",
         "dal",
         "dalle",
         "del",

@@ -256,3 +256,13 @@ def test_explore_source_dedupes_slugs(sample_index):
 
 def test_explore_not_found(sample_index):
     assert explore_ref(sample_index, "nope")["found"] is False
+
+
+@pytest.mark.pure_unit
+def test_tokenize_skips_articulated_prepositions():
+    """`della`/`nella`/`sulla` sono parole vuote: non devono azzerare la query."""
+    from dcl_mcp.context.search import _tokenize_query
+
+    assert _tokenize_query("personale della scuola") == ["personale", "scuola"]
+    assert _tokenize_query("spese nella regione") == ["spese", "regione"]
+    assert _tokenize_query("dati sulla spesa") == ["dati", "spesa"]
