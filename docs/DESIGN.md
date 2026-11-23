@@ -33,6 +33,22 @@ discussion, e i parquet pubblici su GCS via DuckDB.
   lo committa, coincide con lo slug `dataset__table` (mai col nome del dataset
   padre, che rendeva indistinguibili i mart dello stesso dataset).
 
+## Provenienza: `as_of` e `snapshot_year`
+
+Ogni risposta databile espone due cose diverse, da non confondere:
+
+- **`as_of`** (+ `source`, `schema_version`): quando è stato costruito il
+  catalogo ACB. Vale per la *scoperta*, non per i dati.
+- **`snapshot_year`**: l'anno del file pubblicato su GCS, letto dal path della
+  `location` (`.../<slug>/<anno>/file.parquet`). È `null` quando il path è un
+  glob multi-file: non si indovina. Dice se un dataset è vecchio, non se la
+  serie è completa.
+
+`find` restituisce per ogni dataset anche `snippet`, `years` (copertura del
+dato, non freschezza), `n_columns`, `n_marts`: servono a scegliere senza aprire
+la card con `explore`. Motivo misurato: 34–74 `explore` per task, oltre il 60%
+delle chiamate (audit usabilità 2026-11-23).
+
 ## `clean_rows` non è la serie completa
 
 `clean_rows` è il conteggio dell'ultimo snapshot clean pubblicato dal

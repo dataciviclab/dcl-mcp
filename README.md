@@ -107,7 +107,9 @@ Per altri client che usano il formato `mcpServers`, l'entry è
 | | `github_add_discussion_comment` | Commenta una discussion |
 | **GCS** | `gcs_query(slug, sql, layer=, limit=)` | SELECT/CTE read-only sui parquet pubblici |
 
-Ogni risposta ha `ok` (anche gli errori, con `error`/`message`). I tool
+Ogni risposta ha `ok` (anche gli errori, con `error`/`message`). I tool che
+leggono il catalogo espongono `as_of` (quando è stato costruito) e le card
+dataset/mart `snapshot_year` (anno del file pubblicato). I tool
 Discussions usano `repo_full_name` con default `dataciviclab/dataciviclab`.
 
 ## Limiti e sicurezza
