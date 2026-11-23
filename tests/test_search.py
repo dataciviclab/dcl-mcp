@@ -232,8 +232,10 @@ def test_explore_dataset_card_includes_compact_columns(sample_index):
     card = explore_ref(sample_index, "anac_bandi_gara")
     assert card["found"] is True
     assert [c["name"] for c in card["columns"]] == ["cig", "importo"]
-    # colonna compatta: name/type/role, niente description/semantic_type
-    assert set(card["columns"][0]) == {"name", "type", "role"}
+    # colonna compatta, ma con la semantica quando esiste: è ciò che dice
+    # all'agente a cosa serve la colonna senza doverla interrogare.
+    assert card["columns"][0]["semantic_type"] == "cig_code"
+    assert "semantic_type" not in card["columns"][1]
     assert "*" in card["gcs_path"]
 
 
@@ -256,3 +258,13 @@ def test_explore_source_dedupes_slugs(sample_index):
 
 def test_explore_not_found(sample_index):
     assert explore_ref(sample_index, "nope")["found"] is False
+
+
+@pytest.mark.pure_unit
+def test_tokenize_skips_articulated_prepositions():
+    """`della`/`nella`/`sulla` sono parole vuote: non devono azzerare la query."""
+    from dcl_mcp.context.search import _tokenize_query
+
+    assert _tokenize_query("personale della scuola") == ["personale", "scuola"]
+    assert _tokenize_query("spese nella regione") == ["spese", "regione"]
+    assert _tokenize_query("dati sulla spesa") == ["dati", "spesa"]

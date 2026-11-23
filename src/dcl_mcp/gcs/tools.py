@@ -9,10 +9,11 @@ senza clonare il multi-repo.
 
 from __future__ import annotations
 
+import os
+import threading
 from typing import Any
 
-from lab_connectors.duckdb import gcs_connect
-
+from dcl_mcp import telemetry
 from dcl_mcp.app import mcp
 from dcl_mcp.context.fetch import load_topic_index, load_triage
 from dcl_mcp.gcs.resolver import GcsResolveError, resolve, validate_sql
@@ -21,6 +22,64 @@ from dcl_mcp.provenance import catalog_meta, signal_index, snapshot_year
 
 _MAX_LIMIT = 500
 _DEFAULT_LIMIT = 100
+
+# Connessione DuckDB riusata tra le chiamate. La prima query su un glob
+# multi-file paga la listing del bucket (~2 s); le successive nella stessa
+# connessione costano ~250 ms. Con una connessione per chiamata quel lavoro
+# andava perso ogni volta: un agente che interroga lo stesso dataset 27 volte
+# ripagava 27 listing.
+_CONN_LOCK = threading.Lock()
+_CONN: Any = None
+
+
+def _apply_env(con: Any) -> None:
+    """Applica i SET da env di lab-connectors (DUCKDB_THREADS, …).
+
+    `_persistent_conn` ricostruisce `safe_connect` a mano: senza questo, le
+    variabili che il Lab usa per ridurre il picco di memoria non avrebbero
+    effetto proprio sul processo che tiene viva una connessione da 2 GB.
+    """
+    from lab_connectors.duckdb.core import _apply_env_settings
+
+    _apply_env_settings(con)
+
+
+def _persistent_conn() -> Any:
+    """Connessione DuckDB condivisa, creata alla prima query.
+
+    Riusa la config GCS di lab-connectors (`GCS_S3_CONFIG`); il bootstrap
+    (INSTALL/LOAD httpfs) è qui perché `gcs_connect` è un context manager
+    pensato per una query sola. Quando lab-connectors esporrà una factory,
+    questa funzione diventa un wrapper.
+    """
+    global _CONN
+    if _CONN is None:
+        import duckdb
+        from lab_connectors.duckdb.core import GCS_S3_CONFIG
+
+        con = duckdb.connect(
+            ":memory:",
+            config={"memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB")},
+        )
+        con.execute("PRAGMA disable_progress_bar")
+        con.execute("INSTALL httpfs")
+        con.execute("LOAD httpfs")
+        for key, value in GCS_S3_CONFIG.items():
+            con.execute(f"SET {key} = '{value}'")
+        _apply_env(con)
+        _CONN = con
+    return _CONN
+
+
+def reset_connection() -> None:
+    """Chiude e dimentica la connessione (usato dai test e dopo errori I/O)."""
+    global _CONN
+    if _CONN is not None:
+        try:
+            _CONN.close()
+        except Exception:
+            pass
+        _CONN = None
 
 
 def _json_safe(value: Any) -> Any:
@@ -41,11 +100,25 @@ def _run_query(read_paths: list[str], sql: str, limit: int) -> tuple[list[str], 
     )
     final = f"SELECT * FROM ({sql}) AS _inner LIMIT {limit}"
 
-    with gcs_connect(read_paths[0]) as con:
-        con.execute(create_view)
-        cur = con.execute(final)
-        columns = [d[0] for d in cur.description or []]
-        rows = cur.fetchall()
+    with _CONN_LOCK:
+        con = _persistent_conn()
+        try:
+            con.execute(create_view)
+            cur = con.execute(final)
+            columns = [d[0] for d in cur.description or []]
+            rows = cur.fetchall()
+        except Exception as exc:
+            # Solo errori di rete/IO invalidano la connessione: un binder error
+            # (colonna sbagliata) non deve far perdere la cache calda. Il test
+            # è sul tipo, non sul testo del messaggio.
+            import duckdb
+
+            if isinstance(
+                exc,
+                (duckdb.IOException, duckdb.HTTPException, duckdb.ConnectionException),
+            ):
+                reset_connection()
+            raise
     return columns, [[_json_safe(v) for v in row] for row in rows]
 
 
@@ -117,8 +190,16 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
             signal = signal_index(load_triage()).get(resolved.get("dataset") or resolved["slug"])
             if signal:
                 payload.update(signal)
+            telemetry.record(
+                "gcs_query",
+                {"slug": resolved["slug"], "layer": resolved["layer"], "limit": safe_limit},
+                {"n_rows": len(rows), "truncated": truncated, "ok": True},
+            )
             return payload
         except GcsResolveError as exc:
+            telemetry.record(
+                "gcs_query", {"slug": slug, "layer": layer}, {"ok": False, "error": str(exc)[:200]}
+            )
             return {"ok": False, "error": str(exc)}
 
     return guard_ok(_exec, "gcs_query")

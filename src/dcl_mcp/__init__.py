@@ -4,4 +4,4 @@ Server unico `dataciviclab`: contesto org-wide (artefatti ACB),
 GitHub Discussions e query read-only sui parquet pubblici (GCS).
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

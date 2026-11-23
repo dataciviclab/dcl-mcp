@@ -3,14 +3,28 @@
 Client HTTP-only: gli artefatti vivono su
 ``raw.githubusercontent.com/{ACB_REPO}/{ACB_BRANCH}`` (default:
 ``dataciviclab/agent-context-builder`` branch ``context``), prodotti
-dalla CI di ACB ogni ~6h. TTL cache per le sequenze
-lab_map → find → explore sullo stesso ``topic_index.json``.
+dalla CI di ACB ogni ~6h.
+
+Due cache, perché erano due costi diversi:
+
+- ``artifact_cache``: il **testo** scaricato (TTL ``ACB_ARTIFACT_TTL_SECONDS``);
+- ``_parsed``: l'**oggetto** già deserializzato. Prima ``json.loads`` girava a
+  ogni chiamata: 2,4 MB per ``topic_index``, 372 KB per ``workspace_triage``.
+  È la ragione per cui dieci ``find`` in parallelo costavano 1,4 s ciascuna.
+
+La cache dell'oggetto si invalida da sé: è legata al testo da cui è nata, quindi
+se il TTL scade e il contenuto cambia si ri-parsa (e i test che invalidano
+``artifact_cache`` continuano a funzionare).
+
+Il fetch è **single-flight**: chiamate concorrenti sullo stesso path aspettano
+un solo download invece di scaricare N volte lo stesso file.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from typing import Any
 
@@ -25,16 +39,24 @@ RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 ARTIFACT_TTL_SECONDS = int(os.environ.get("ACB_ARTIFACT_TTL_SECONDS", "120"))
 artifact_cache: TtlCache[str, str] = TtlCache(ttl_seconds=ARTIFACT_TTL_SECONDS)
 
+# path -> (testo da cui è stato parsato, oggetto)
+_parsed: dict[str, tuple[str, Any]] = {}
+_path_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
 _log = get_mcp_logger("dcl-mcp-context", level=os.environ.get("ACB_LOG_LEVEL", "INFO"))
 
 
-def fetch(path: str, retries: int = 1, backoff: float = 1.0, use_cache: bool = True) -> str:
-    """Scarica un artefatto dal branch context, con TTL cache opzionale."""
-    if use_cache:
-        cached = artifact_cache.get(path)
-        if cached is not None:
-            return cached
+def _lock_for(path: str) -> threading.Lock:
+    with _locks_guard:
+        lock = _path_locks.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _path_locks[path] = lock
+        return lock
 
+
+def _download(path: str, retries: int, backoff: float, use_cache: bool) -> str:
     url = f"{RAW_BASE}/{path}"
     client = get_http()
     last_err: Exception | None = None
@@ -65,21 +87,48 @@ def fetch(path: str, retries: int = 1, backoff: float = 1.0, use_cache: bool = T
     raise last_err or Exception(f"Failed to fetch {path}")
 
 
-def load_topic_index() -> dict[str, Any]:
-    """Fetch + parse di topic_index.json (dict plain, vuoto se non dict)."""
-    raw = fetch("topic_index.json")
+def fetch(path: str, retries: int = 1, backoff: float = 1.0, use_cache: bool = True) -> str:
+    """Scarica un artefatto dal branch context, con TTL cache e single-flight."""
+    if use_cache:
+        cached = artifact_cache.get(path)
+        if cached is not None:
+            return cached
+        with _lock_for(path):
+            # Ricontrollo dentro il lock: chi aspettava trova il download fatto.
+            cached = artifact_cache.get(path)
+            if cached is not None:
+                return cached
+            return _download(path, retries, backoff, use_cache)
+    return _download(path, retries, backoff, use_cache)
+
+
+def parse(path: str, use_cache: bool = True) -> Any:
+    """Fetch + parse con cache dell'oggetto, legata al testo da cui è nato."""
+    raw = fetch(path, use_cache=use_cache)
+    if use_cache:
+        cached = _parsed.get(path)
+        if cached is not None and cached[0] == raw:
+            return cached[1]
     data = json.loads(raw)
+    if use_cache:
+        _parsed[path] = (raw, data)
+    return data
+
+
+def load_topic_index() -> dict[str, Any]:
+    """topic_index.json (dict plain, vuoto se non dict)."""
+    data = parse("topic_index.json")
     return data if isinstance(data, dict) else {}
 
 
 def load_triage() -> dict[str, Any]:
-    """Fetch + parse di workspace_triage.json (vuoto se non disponibile).
+    """workspace_triage.json (vuoto se non disponibile).
 
     Non fatale: la provienza per dataset è un arricchimento, non una
     precondizione dei tool.
     """
     try:
-        data = json.loads(fetch("workspace_triage.json"))
+        data = parse("workspace_triage.json")
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
