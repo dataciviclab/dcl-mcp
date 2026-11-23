@@ -5,8 +5,21 @@ Storia completa: `git log`.
 
 ## [Unreleased]
 
+### Changed
+
+- `workspace_triage(section="registry")` è **compatto per default**: niente
+  `signals_detail` (~186 KB → 10 KB). Il dettaglio per dataset è già in
+  `find`/`explore`/`lab_map(view="datasets")`; per averlo:
+  `detail=true`. **Breaking** per chi leggeva `signals_detail` senza chiedere.
+
 ### Added
 
+- `lab_map(view="datasets", domain=)` — enumerazione del catalogo: una riga per
+  dataset con `years`, `gcs_available`, `snapshot_year`, `n_columns`,
+  `last_run`, `run_year` (~121 KB per 547, 3 KB per un dominio). Risponde a
+  domande di catalogo ("quali sono obsoleti?") senza un `explore` per dataset:
+  nell'audit la stessa domanda costava 1.516–2.606 chiamate con esito
+  non deterministico.
 - Provenienza strutturata: `as_of` (quando è stato costruito il catalogo) e
   `source` in `find`, `explore`, `lab_map`, `join_suggestions`, `gcs_query`,
   `workspace_triage`, `session_bootstrap`; `snapshot_year` (anno del file

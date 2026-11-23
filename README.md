@@ -95,11 +95,11 @@ Per altri client che usano il formato `mcpServers`, l'entry è
 | Famiglia | Tool | Cosa fa |
 |---|---|---|
 | **Context** | `session_bootstrap` | Orientamento rapido (markdown) |
-| | `lab_map(domain=)` | Domini → repo → fonti; con `domain=` i totali sono quelli del dominio |
+| | `lab_map(domain=, view=)` | Domini → repo → fonti; `view="datasets"` elenca i dataset con anni, freschezza e accessibilità GCS |
 | | `find(query, type=, domain=, include_github=)` | Ricerca ranked cross-entity, con `total_catalog` e `returned` |
 | | `explore(ref)` | Deep-dive di dataset/repo/domain/source/analysis |
 | | `join_suggestions(slug, limit=, min_years=, include_names=)` | Dataset joinabili dai semantic_type: colonne, overlap anni, `type_mismatch` |
-| | `workspace_triage(section=)` | Stato Lab: radar, PR, issue, discussioni |
+| | `workspace_triage(section=, detail=)` | Stato Lab: radar, PR, issue, discussioni; `registry` compatto, `detail=true` per i run per dataset |
 | **Discussions** | `github_list_discussions(query=, category_name=)` | Elenca o cerca full-text/categoria |
 | | `github_list_discussion_categories` | Categorie valide per la creazione |
 | | `github_get_discussion(include_comments=)` | Legge una discussion, con commenti e reply |

@@ -16,6 +16,7 @@ from dcl_mcp.app import GITHUB_TOKEN_MISSING, get_http, github_token, mcp
 from dcl_mcp.context import fetch as ctx_fetch
 from dcl_mcp.context.search import (
     ENTITY_TYPES,
+    dataset_listing,
     explore_ref,
     lab_map_summary,
     normalize_entity_type,
@@ -50,11 +51,15 @@ def session_bootstrap() -> dict[str, object]:
     description=(
         "Machine-readable Lab state. Default: compact summary. "
         "Use section= to get a specific part: radar, prs, issues, "
-        "discussions, registry, git, warnings."
+        "discussions, registry, git, warnings. "
+        "registry is compact by default (per-repo counts + updated_at); "
+        "detail=true adds per-dataset pipeline runs (signals_detail, ~190 KB)."
     ),
     structured_output=True,
 )
-def workspace_triage(section: str | None = None) -> dict[str, object]:
+def workspace_triage(
+    section: str | None = None, detail: bool = False
+) -> dict[str, object]:
     def _exec() -> dict[str, object]:
         raw = ctx_fetch.fetch("workspace_triage.json")
         data: dict = json.loads(raw)
@@ -84,6 +89,21 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
             }
 
         # Section filter
+        def _registry(d: dict) -> dict:
+            # `signals_detail` (~190 KB, una voce per dataset) duplica ciò che
+            # `find`/`explore`/`lab_map(view="datasets")` già espongono.
+            # Resta disponibile con detail=true.
+            repos = d.get("registry_summary", [])
+            if detail:
+                return {"registry_summary": repos, "detail": True}
+            compact = [
+                {k: v for k, v in repo.items() if k != "signals_detail"}
+                if isinstance(repo, dict)
+                else repo
+                for repo in repos
+            ]
+            return {"registry_summary": compact, "detail": False}
+
         sections = {
             "radar": lambda d: d.get("radar", {}),
             "prs": lambda d: {"prs": d.get("prs", []), "count": len(d.get("prs", []))},
@@ -92,7 +112,7 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
                 "discussions": d.get("discussions", []),
                 "count": len(d.get("discussions", [])),
             },
-            "registry": lambda d: {"registry_summary": d.get("registry_summary", [])},
+            "registry": _registry,
             "git": lambda d: {"git_state": d.get("git_state", {})},
             "warnings": lambda d: {"warnings": d.get("warnings", [])},
             "pipeline": lambda d: {"pipeline_state": d.get("pipeline_state", {})},
@@ -115,11 +135,15 @@ def workspace_triage(section: str | None = None) -> dict[str, object]:
     description=(
         "Lab navigation map — domains → repos → sources. "
         "Use domain= to focus on one editorial theme: an unknown domain "
-        "returns ok=false with the list of valid domain slugs."
+        "returns ok=false with the list of valid domain slugs. "
+        "view='datasets' returns one row per dataset (slug, name, years, "
+        "gcs_available, snapshot_year, n_columns, last_run, run_year) — "
+        "~110 KB for all 547, use domain= to shrink it: use it to enumerate "
+        "the catalog instead of calling explore on every dataset."
     ),
     structured_output=True,
 )
-def lab_map(domain: str | None = None) -> dict[str, object]:
+def lab_map(domain: str | None = None, view: str | None = None) -> dict[str, object]:
     def _exec() -> dict[str, object]:
         data = ctx_fetch.load_topic_index()
         if domain:
@@ -134,6 +158,21 @@ def lab_map(domain: str | None = None) -> dict[str, object]:
                     "error": f"Dominio '{domain}' non trovato. Domini validi: {valid}",
                     "valid_domains": valid,
                 }
+        if view == "datasets":
+            rows = dataset_listing(
+                data, domain=domain, signals=signal_index(ctx_fetch.load_triage())
+            )
+            return {
+                "content": {"datasets": rows, "count": len(rows), "domain": domain},
+                **catalog_meta(data),
+                "ok": True,
+            }
+        if view not in (None, "tree"):
+            return {
+                "ok": False,
+                "error": f"view '{view}' non valida. Opzioni: tree, datasets.",
+                "valid_views": ["tree", "datasets"],
+            }
         summary = lab_map_summary(data, domain=domain)
         return {"content": summary, **catalog_meta(data), "ok": True}
 

@@ -542,6 +542,41 @@ def search_index(
     return results[: max(limit, 1)]
 
 
+def dataset_listing(
+    topic_index: dict[str, Any],
+    domain: str | None = None,
+    signals: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Una riga per dataset: quanto basta a rispondere a domande di catalogo.
+
+    Esiste per l'enumerazione. Senza, l'unico modo per vedere tutti i dataset è
+    un `explore` per ciascuno: nell'audit la domanda "quali dataset sono
+    obsoleti" è costata 1.516–2.606 chiamate con esito non deterministico.
+    547 righe costano ~70 KB: una chiamata sola.
+    """
+    rows: list[dict[str, Any]] = []
+    for ds in flatten_datasets(topic_index.get("datasets") or {}):
+        meta = (topic_index.get("by_slug") or {}).get(ds["slug"]) or {}
+        if domain and (meta.get("domain") or ds.get("domain")) != domain:
+            continue
+        period = ds.get("period") or {}
+        row: dict[str, Any] = {
+            "slug": ds["slug"],
+            "name": ds.get("name") or ds["slug"],
+            "years": {"start": period.get("start"), "end": period.get("end")},
+            "gcs_available": bool((ds.get("location") or {}).get("path")),
+            "snapshot_year": dataset_snapshot(ds)["snapshot_year"],
+            "n_columns": len(ds.get("columns") or []),
+        }
+        update = (signals or {}).get(ds["slug"])
+        if update:
+            row["last_run"] = update.get("last_run")
+            row["run_year"] = update.get("run_year")
+        rows.append(row)
+    rows.sort(key=lambda row: row["slug"])
+    return rows
+
+
 def lab_map_summary(topic_index: dict[str, Any], domain: str | None = None) -> dict[str, Any]:
     """Compact navigation tree: domains → repos → sources."""
     repos = topic_index.get("repos") or {}

@@ -142,6 +142,89 @@ def test_lab_map_domain_filter():
     assert [d["slug"] for d in content["domains"]] == ["territorio-ambiente"]
 
 
+@pytest.mark.contract
+def test_lab_map_datasets_view_enumerates():
+    """view=datasets: enumerazione con anno, freschezza e accessibilità."""
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    _patch_fetch(
+        fake,
+        "workspace_triage.json",
+        text=json.dumps(
+            {
+                "registry_summary": [
+                    {
+                        "repo": "rifiuti-urbani",
+                        "updated_at": "2026-11-22",
+                        "signals_detail": [
+                            {
+                                "id": "ispra_ru_base",
+                                "run": {"year": 2024, "started_at": "2026-11-06T22:12:55Z"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+    _use_fake(fake)
+
+    content = context_tools.lab_map(view="datasets")["content"]
+    assert content["count"] == len(content["datasets"]) == 3
+    row = next(r for r in content["datasets"] if r["slug"] == "ispra_ru_base")
+    assert row["years"] == {"start": 2010, "end": 2024}
+    assert row["gcs_available"] is True
+    assert row["snapshot_year"] == 2024
+    assert row["last_run"] == "2026-11-06T22:12:55Z"
+    assert row["run_year"] == 2024
+
+    filtered = context_tools.lab_map(domain="territorio-ambiente", view="datasets")["content"]
+    assert filtered["count"] == 1
+
+
+@pytest.mark.contract
+def test_lab_map_invalid_view_is_honest():
+    fake = FakeHttpClient()
+    _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
+    _use_fake(fake)
+    result = context_tools.lab_map(view="nope")
+    assert result["ok"] is False
+    assert result["valid_views"] == ["tree", "datasets"]
+
+
+@pytest.mark.contract
+def test_workspace_triage_registry_is_compact_by_default():
+    """signals_detail (190 KB) solo con detail=true: è già in find/explore."""
+    fake = FakeHttpClient()
+    _patch_fetch(
+        fake,
+        "workspace_triage.json",
+        text=json.dumps(
+            {
+                "registry_summary": [
+                    {
+                        "repo": "appalti-pubblici",
+                        "updated_at": "2026-11-16",
+                        "datasets": 16,
+                        "signals_detail": [{"id": "anac_bandi_gara", "run": {"year": 2026}}],
+                    }
+                ]
+            }
+        ),
+    )
+    _use_fake(fake)
+
+    compact = context_tools.workspace_triage(section="registry")
+    repo = compact["content"]["registry_summary"][0]
+    assert compact["content"]["detail"] is False
+    assert "signals_detail" not in repo
+    assert repo["updated_at"] == "2026-11-16"
+
+    full = context_tools.workspace_triage(section="registry", detail=True)
+    assert full["content"]["detail"] is True
+    assert full["content"]["registry_summary"][0]["signals_detail"]
+
+
 @pytest.mark.regression
 def test_find_invalid_type_is_honest():
     """type= sconosciuto: ok:false coi tipi validi, non zero risultati silenziosi."""
