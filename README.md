@@ -139,7 +139,8 @@ cui titoli contengono i token della query), non sostituisce il server `github`.
 ```bash
 pip install -e ".[dev]"
 pytest tests/ -q -m "not smoke"
-pytest tests/test_smoke.py -q -m smoke   # golden path, rete richiesta
+pytest tests/test_smoke.py -q -m smoke      # golden path in-process, rete
+pytest tests/test_e2e_stdio.py -q -m smoke  # spawn del server + protocollo MCP
 ruff check src/ tests/
 mypy src/dcl_mcp/
 ```
