@@ -35,9 +35,7 @@ def test_snapshot_year(path, expected):
 def test_catalog_meta_carries_as_of_and_schema():
     from dcl_mcp.context import fetch as ctx_fetch
 
-    meta = catalog_meta(
-        {"generated_at": "2026-11-23T06:02:34", "schema_version": 7}
-    )
+    meta = catalog_meta({"generated_at": "2026-11-23T06:02:34", "schema_version": 7})
     assert meta["as_of"] == "2026-11-23T06:02:34"
     assert meta["schema_version"] == 7
     # La fonte dichiarata segue l'env (ACB_REPO/ACB_BRANCH), non è costante.
@@ -50,60 +48,28 @@ def test_catalog_meta_tolerates_empty_index():
     assert "schema_version" not in meta
 
 
-def test_signal_index_uses_label_not_prefixed_id():
-    """`id` può essere prefissato (`compose:slug`); la chiave è `label`.
-
-    Regressione: con `id` prima, i 42 dataset compose restavano senza
-    last_run/run_year, proprio quelli la cui freschezza dipende da altri.
-    """
-    triage = {
-        "registry_summary": [
-            {
-                "repo": "appalti-pubblici",
-                "updated_at": "2026-11-22",
-                "signals_detail": [
-                    {
-                        "id": "compose:anac_cross",
-                        "label": "anac_cross",
-                        "run": {"year": 2026, "started_at": "2026-11-16T10:00:00Z"},
+def test_signal_index_from_topic_index():
+    """La freschezza per dataset arriva da topic_index.datasets[].last_run (v8)."""
+    topic_index = {
+        "schema_version": 8,
+        "repos": {"dataset-incubator": {"updated_at": "2026-11-22"}},
+        "datasets": {
+            "istat": [
+                {
+                    "slug": "personale_ssn",
+                    "registry_source": "dataset-incubator",
+                    "last_run": {
+                        "at": "2026-11-06T22:12:55+00:00",
+                        "year": 2021,
+                        "status": "SUCCESS",
                     },
-                    # senza label: si recupera togliendo il prefisso
-                    {"id": "compose:sentenze_complete", "run": {"year": 2025}},
-                ],
-            }
-        ]
+                },
+                {"slug": "pensioni_pa_dag", "registry_source": "dataset-incubator"},
+                {"slug": "senza_repo", "last_run": {"at": "2026-11-01T00:00:00Z"}},
+            ]
+        },
     }
-    index = signal_index(triage)
-    assert index["anac_cross"]["run_year"] == 2026
-    assert index["sentenze_complete"]["run_year"] == 2025
-    assert "compose:anac_cross" not in index
-
-
-def test_signal_index_from_registry_summary():
-    """L'aggiornamento per dataset arriva da registry_summary.signals_detail."""
-    triage = {
-        "registry_summary": [
-            {
-                "repo": "dataset-incubator",
-                "updated_at": "2026-11-22",
-                "signals_detail": [
-                    {
-                        "id": "personale_ssn",
-                        "run": {
-                            "run_id": "x",
-                            "year": 2021,
-                            "status": "SUCCESS",
-                            "started_at": "2026-11-06T22:12:55+00:00",
-                        },
-                    },
-                    {"id": "pensioni_pa_dag"},  # nessuna run
-                ],
-            },
-            {"repo": "rotto", "signals_detail": "non-una-lista"},
-            "non-un-dict",
-        ]
-    }
-    index = signal_index(triage)
+    index = signal_index(topic_index)
     assert index["personale_ssn"] == {
         "last_run": "2026-11-06T22:12:55+00:00",
         "run_year": 2021,
@@ -111,6 +77,7 @@ def test_signal_index_from_registry_summary():
         "repo_updated_at": "2026-11-22",
     }
     assert index["pensioni_pa_dag"]["last_run"] is None
+    assert index["senza_repo"]["repo_updated_at"] is None
     assert signal_index(None) == {}
 
 
@@ -125,9 +92,7 @@ def test_dataset_card_joins_is_a_teaser():
                     "name": "A",
                     "registry_source": "r",
                     "period": {"start": 2020, "end": 2024},
-                    "columns": [
-                        {"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}
-                    ],
+                    "columns": [{"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}],
                 }
             ],
             "s2": [
@@ -136,9 +101,7 @@ def test_dataset_card_joins_is_a_teaser():
                     "name": "B",
                     "registry_source": "r",
                     "period": {"start": 2020, "end": 2024},
-                    "columns": [
-                        {"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}
-                    ],
+                    "columns": [{"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}],
                 }
             ],
             "s3": [
@@ -147,9 +110,7 @@ def test_dataset_card_joins_is_a_teaser():
                     "name": "C",
                     "registry_source": "r",
                     "period": {"start": 2021, "end": 2024},
-                    "columns": [
-                        {"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}
-                    ],
+                    "columns": [{"name": "cig", "type": "VARCHAR", "semantic_type": "cig_code"}],
                 }
             ],
         },
@@ -162,9 +123,7 @@ def test_dataset_card_joins_is_a_teaser():
 
 
 def test_dataset_snapshot_from_location():
-    snap = dataset_snapshot(
-        {"location": {"path": "gs://b/a/s/2024/f.parquet", "multi_file": True}}
-    )
+    snap = dataset_snapshot({"location": {"path": "gs://b/a/s/2024/f.parquet", "multi_file": True}})
     assert snap == {"snapshot_year": 2024, "multi_file": True}
     assert dataset_snapshot(None) == {"snapshot_year": None, "multi_file": False}
 

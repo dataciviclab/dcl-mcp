@@ -60,14 +60,12 @@ def session_bootstrap() -> dict[str, object]:
         "summary. For the narrative overview use session_bootstrap. "
         "Use section= to get a specific part: radar, prs, issues, "
         "discussions, registry, git, warnings. "
-        "registry is compact by default (per-repo counts + updated_at); "
-        "detail=true adds per-dataset pipeline runs (signals_detail, ~190 KB)."
+        "registry is compact (per-repo counts + updated_at); per-dataset "
+        "freshness is in lab_map(view='datasets') / explore (last_run)."
     ),
     structured_output=True,
 )
-def workspace_triage(
-    section: str | None = None, detail: bool = False
-) -> dict[str, object]:
+def workspace_triage(section: str | None = None, detail: bool = False) -> dict[str, object]:
     def _exec() -> dict[str, object]:
         raw = ctx_fetch.fetch("workspace_triage.json")
         data: dict = json.loads(raw)
@@ -77,7 +75,7 @@ def workspace_triage(
             radar = data.get("radar", {})
             registry = data.get("registry_summary", [])
             total_ds = sum(r.get("datasets", 0) for r in registry if r.get("available"))
-            total_signals = sum(r.get("signals", 0) for r in registry if r.get("available"))
+            total_checks = sum(r.get("checks", 0) for r in registry if r.get("available"))
             return {
                 "radar": {
                     "green": radar.get("green", 0),
@@ -86,7 +84,7 @@ def workspace_triage(
                     "persistent_red": radar.get("persistent_red", 0),
                 },
                 "datasets": total_ds,
-                "signals": total_signals,
+                "checks": total_checks,
                 "repos_active": sum(1 for r in registry if r.get("available")),
                 "prs": data.get("open_prs") or len(data.get("prs", [])),
                 "issues": data.get("open_issues") or len(data.get("issues", [])),
@@ -98,19 +96,22 @@ def workspace_triage(
 
         # Section filter
         def _registry(d: dict) -> dict:
-            # `signals_detail` (~190 KB, una voce per dataset) duplica ciò che
-            # `find`/`explore`/`lab_map(view="datasets")` già espongono.
-            # Resta disponibile con detail=true.
-            repos = d.get("registry_summary", [])
-            if detail:
-                return {"registry_summary": repos, "detail": True}
-            compact = [
+            # Compat: un triage generato da ACB < v8 può ancora portare
+            # `signals_detail` (~190 KB, una voce per dataset); la freschezza
+            # per dataset ora vive in topic_index.datasets[].last_run.
+            repos = [
                 {k: v for k, v in repo.items() if k != "signals_detail"}
                 if isinstance(repo, dict)
                 else repo
-                for repo in repos
+                for repo in d.get("registry_summary", [])
             ]
-            return {"registry_summary": compact, "detail": False}
+            payload: dict[str, object] = {"registry_summary": repos}
+            if detail:
+                payload["note"] = (
+                    "registry v2: niente signals_detail. La freschezza per dataset è "
+                    "in lab_map(view='datasets') / explore (last_run, run_year)."
+                )
+            return payload
 
         sections = {
             "radar": lambda d: d.get("radar", {}),
@@ -168,7 +169,7 @@ def lab_map(domain: str | None = None, view: str | None = None) -> dict[str, obj
                 }
         if view == "datasets":
             rows = dataset_listing(
-                data, domain=domain, signals=signal_index(ctx_fetch.load_triage())
+                data, domain=domain, signals=signal_index(ctx_fetch.load_topic_index())
             )
             telemetry.record(
                 "lab_map", {"view": "datasets", "domain": domain}, {"count": len(rows)}
@@ -283,7 +284,7 @@ def find(
         # Aggiornamento reale per dataset (ultima run di pipeline + updated_at
         # del repo), agganciato qui per non obbligare l'agente a incrociare
         # `workspace_triage(section="registry")` con 547 `explore`.
-        signals = signal_index(ctx_fetch.load_triage())
+        signals = signal_index(ctx_fetch.load_topic_index())
         entries = {
             d["slug"]: d
             for d in (ds for v in (data.get("datasets") or {}).values() for ds in v)
@@ -321,9 +322,7 @@ def find(
             # lazy): prima qui si guardava solo GITHUB_TOKEN.
             token = github_token()
             issues, issues_err = _search_github_issues(query, token, limit)
-            discussions, discussions_err = _search_github_discussions(
-                query, token, min(limit, 5)
-            )
+            discussions, discussions_err = _search_github_discussions(query, token, min(limit, 5))
             payload["issues"] = issues
             payload["discussions"] = discussions
             payload["total_external"] = len(issues) + len(discussions)
@@ -337,11 +336,19 @@ def find(
         payload["total"] = payload["total_catalog"] + payload.get("total_external", 0)
         telemetry.record(
             "find",
-            {"query": query, "type": type, "domain": domain, "limit": limit,
-             "github": include_github},
-            {"total": len(matched), "returned": len(results),
-             "top": [r.get("slug") for r in results[:5]],
-             "top_types": [r.get("type") for r in results[:5]]},
+            {
+                "query": query,
+                "type": type,
+                "domain": domain,
+                "limit": limit,
+                "github": include_github,
+            },
+            {
+                "total": len(matched),
+                "returned": len(results),
+                "top": [r.get("slug") for r in results[:5]],
+                "top_types": [r.get("type") for r in results[:5]],
+            },
             int((time.perf_counter() - started) * 1000),
         )
         return {"content": payload, **catalog_meta(data), "ok": True}
@@ -371,23 +378,19 @@ def explore(ref: str) -> dict[str, object]:
             from dcl_mcp.gcs.resolver import (
                 GcsResolveError,
                 describe_parquet_columns,
-                mart_card_detail,
                 resolve,
             )
 
             slug = content.get("slug") or ""
-            repo = content.get("registry_source") or ""
             # Path del mart (per gcs_path/query_hint coerenti col layer)
             try:
                 resolved = resolve(data, slug, layer="mart")
             except GcsResolveError:
                 resolved = None
-            # Colonne: registry se presenti (future-proof), altrimenti
-            # DESCRIBE sul parquet pubblicato (footer-only)
-            detail = mart_card_detail(repo, slug) if repo else None
-            columns = (detail or {}).get("columns")
-            if not columns and resolved is not None:
-                columns = describe_parquet_columns(resolved["read_paths"])
+            # Colonne: DESCRIBE sul parquet pubblicato (footer-only). Il
+            # registry non porta lo schema dei mart (26.575 colonne nel
+            # workspace: +590 KB per dati che il parquet espone già).
+            columns = describe_parquet_columns(resolved["read_paths"]) if resolved else None
             if columns:
                 content["columns"] = columns
                 content["n_columns"] = len(columns)
@@ -399,8 +402,6 @@ def explore(ref: str) -> dict[str, object]:
                         "Colonne dal parquet (DESCRIBE): solo nome e tipo. "
                         "role e semantic_type non sono disponibili per i mart."
                     )
-                if detail and detail.get("primary_key"):
-                    content["primary_key"] = detail["primary_key"]
                 content.pop("note", None)
             else:
                 # Non indurre a usare le colonne del clean: rimuovile e dichiara.
@@ -422,8 +423,7 @@ def explore(ref: str) -> dict[str, object]:
                 # dataset mostravano tutti il nome del dataset padre.
                 content["name"] = resolved["name"]
                 content["query_hint"] = (
-                    f'gcs_query(slug="{slug}", layer="mart", '
-                    'sql="SELECT count(*) AS n FROM _data")'
+                    f'gcs_query(slug="{slug}", layer="mart", sql="SELECT count(*) AS n FROM _data")'
                 )
             else:
                 # gcs_path/query_hint ereditati dal clean sarebbero sbagliati
@@ -433,14 +433,16 @@ def explore(ref: str) -> dict[str, object]:
         # usa lo slug del dataset padre, che è la chiave dei segnali.
         if isinstance(content, dict) and content.get("type") in ("dataset", "mart"):
             signal_slug = content.get("dataset") or content.get("slug")
-            update = signal_index(ctx_fetch.load_triage()).get(str(signal_slug))
+            update = signal_index(ctx_fetch.load_topic_index()).get(str(signal_slug))
             if update:
                 content.update(update)
         telemetry.record(
             "explore",
             {"ref": ref},
-            {"found": bool(content.get("found")) if isinstance(content, dict) else None,
-             "entity": content.get("type") if isinstance(content, dict) else None},
+            {
+                "found": bool(content.get("found")) if isinstance(content, dict) else None,
+                "entity": content.get("type") if isinstance(content, dict) else None,
+            },
         )
         return {"content": content, **catalog_meta(data), "ok": True}
 

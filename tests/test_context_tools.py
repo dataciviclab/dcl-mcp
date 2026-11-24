@@ -104,9 +104,7 @@ def test_fetch_does_not_cache_http_error_body():
     fake = FakeHttpClient()
     url = f"{ctx_fetch.RAW_BASE}/session_bootstrap.md"
     # Come il client reale: response presente, nessuna eccezione.
-    fake.responses[url] = HttpResult(
-        response=fake_response(404, text="404: Not Found"), err=None
-    )
+    fake.responses[url] = HttpResult(response=fake_response(404, text="404: Not Found"), err=None)
     ctx_fetch.artifact_cache.invalidate("session_bootstrap.md")
     _use_fake(fake)
 
@@ -175,7 +173,7 @@ def test_lab_map_datasets_view_enumerates():
     assert row["years"] == {"start": 2010, "end": 2024}
     assert row["gcs_available"] is True
     assert row["snapshot_year"] == 2024
-    assert row["last_run"] == "2026-11-06T22:12:55Z"
+    assert row["last_run"] == "2024-11-06T22:12:55Z"
     assert row["run_year"] == 2024
 
     filtered = context_tools.lab_map(domain="territorio-ambiente", view="datasets")["content"]
@@ -193,8 +191,8 @@ def test_lab_map_invalid_view_is_honest():
 
 
 @pytest.mark.contract
-def test_workspace_triage_registry_is_compact_by_default():
-    """signals_detail (190 KB) solo con detail=true: è già in find/explore."""
+def test_workspace_triage_registry_strips_legacy_signals_detail():
+    """Compat: un triage ACB < v8 con signals_detail non gonfia la risposta."""
     fake = FakeHttpClient()
     _patch_fetch(
         fake,
@@ -216,13 +214,12 @@ def test_workspace_triage_registry_is_compact_by_default():
 
     compact = context_tools.workspace_triage(section="registry")
     repo = compact["content"]["registry_summary"][0]
-    assert compact["content"]["detail"] is False
     assert "signals_detail" not in repo
     assert repo["updated_at"] == "2026-11-16"
 
     full = context_tools.workspace_triage(section="registry", detail=True)
-    assert full["content"]["detail"] is True
-    assert full["content"]["registry_summary"][0]["signals_detail"]
+    assert "signals_detail" not in full["content"]["registry_summary"][0]
+    assert "lab_map" in full["content"]["note"]
 
 
 @pytest.mark.regression
@@ -319,58 +316,14 @@ def test_explore_dataset_repo_domain_not_found():
 
 
 @pytest.mark.contract
-def test_explore_mart_uses_registry_columns_when_present(monkeypatch):
-    """Se il registry ha le colonne del mart, quelle vincono."""
-    fake = FakeHttpClient()
-    idx = json.loads(json.dumps(SAMPLE_INDEX))
-    idx["datasets"]["ispra"][0]["mart_refs"] = ["ispra_ru_base__mart_comuni"]
-    _patch_fetch(fake, "topic_index.json", text=json.dumps(idx))
-    _use_fake(fake)
-
-    def fake_detail(repo, mart_slug):
-        assert repo == "rifiuti-urbani"
-        assert mart_slug == "ispra_ru_base__mart_comuni"
-        return {
-            "table": "mart_comuni",
-            "columns": [{"name": "anno", "type": "INTEGER", "role": "dimension"}],
-            "primary_key": ["anno"],
-        }
-
-    monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", fake_detail)
-    monkeypatch.setattr(
-        "dcl_mcp.gcs.resolver.resolve",
-        lambda topic, slug, layer="clean": {
-            "read_paths": ["gs://dataciviclab-mart/x.parquet"],
-            "gs_path": "gs://dataciviclab-mart/rifiuti/mart_comuni.parquet",
-            "name": "Mart Comuni",
-        },
-    )
-    content = context_tools.explore(ref="ispra_ru_base__mart_comuni")["content"]
-
-    assert content["type"] == "mart"
-    assert [c["name"] for c in content["columns"]] == ["anno"]
-    assert content["primary_key"] == ["anno"]
-    assert content["gcs_path"] == "gs://dataciviclab-mart/rifiuti/mart_comuni.parquet"
-    # Il nome è quello del mart, non del dataset padre.
-    assert content["name"] == "Mart Comuni"
-    # Un solo nome per il path: `gs_path` non esiste più nella card.
-    assert "gs_path" not in content
-    assert 'layer="mart"' in content["query_hint"]
-    # La card è del mart: niente campi del clean parent.
-    assert "clean_rows" not in content and "clean_rows_note" not in content
-    assert "marts" not in content
-
-
-@pytest.mark.contract
 def test_explore_mart_describes_parquet_when_registry_empty(monkeypatch):
-    """I registry non committano colonne mart: DESCRIBE sul parquet (audit 4)."""
+    """Le colonne dei mart vengono dal DESCRIBE del parquet (audit 4)."""
     fake = FakeHttpClient()
     idx = json.loads(json.dumps(SAMPLE_INDEX))
     idx["datasets"]["ispra"][0]["mart_refs"] = ["ispra_ru_base__mart_comuni"]
     _patch_fetch(fake, "topic_index.json", text=json.dumps(idx))
     _use_fake(fake)
 
-    monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", lambda repo, slug: None)
     monkeypatch.setattr(
         "dcl_mcp.gcs.resolver.resolve",
         lambda topic, slug, layer="clean": {
@@ -396,11 +349,10 @@ def test_explore_mart_describes_parquet_when_registry_empty(monkeypatch):
 
 @pytest.mark.contract
 def test_explore_mart_without_schema_drops_parent_columns(monkeypatch):
-    """Né registry né DESCRIBE: niente colonne/path del clean al posto di quelli del mart."""
+    """DESCRIBE non disponibile: niente colonne/path del clean al posto del mart."""
     fake = FakeHttpClient()
     _patch_fetch(fake, "topic_index.json", text=json.dumps(SAMPLE_INDEX))
     _use_fake(fake)
-    monkeypatch.setattr("dcl_mcp.gcs.resolver.mart_card_detail", lambda repo, slug: None)
     monkeypatch.setattr(
         "dcl_mcp.gcs.resolver.resolve",
         lambda topic, slug, layer="clean": (_ for _ in ()).throw(GcsResolveError("nope")),
@@ -515,9 +467,7 @@ def test_find_include_github_merges_discussions(monkeypatch):
         seen.update(variables)
         return fake_graphql(query, variables)
 
-    monkeypatch.setattr(
-        "dcl_mcp.discussions.client._graphql", fake_graphql_capture
-    )
+    monkeypatch.setattr("dcl_mcp.discussions.client._graphql", fake_graphql_capture)
     monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
     monkeypatch.setattr(app, "_ENV_LOADED", True)
 
@@ -557,9 +507,7 @@ def test_find_include_github_accepts_personal_access_token(monkeypatch):
 
     assert content["github_ok"] is True
     assert "github_errors" not in content
-    graphql_calls = [
-        call for call in fake.requests if call[1] == "https://api.github.com/graphql"
-    ]
+    graphql_calls = [call for call in fake.requests if call[1] == "https://api.github.com/graphql"]
     assert graphql_calls, "la ricerca discussioni non è partita"
     assert graphql_calls[0][2]["headers"]["Authorization"] == "Bearer pat-token"
 
@@ -673,8 +621,18 @@ def test_join_suggestions_tool_returns_dataset_pairs():
                     "category": "appalti",
                     "period": {"start": 2020, "end": 2023},
                     "columns": [
-                        {"name": "cig", "type": "VARCHAR", "role": "dimension", "semantic_type": "cig_code"},
-                        {"name": "anno", "type": "INTEGER", "role": "dimension", "semantic_type": "year"},
+                        {
+                            "name": "cig",
+                            "type": "VARCHAR",
+                            "role": "dimension",
+                            "semantic_type": "cig_code",
+                        },
+                        {
+                            "name": "anno",
+                            "type": "INTEGER",
+                            "role": "dimension",
+                            "semantic_type": "year",
+                        },
                     ],
                 },
                 {
@@ -683,7 +641,12 @@ def test_join_suggestions_tool_returns_dataset_pairs():
                     "category": "appalti",
                     "period": {"start": 2021, "end": 2023},
                     "columns": [
-                        {"name": "cig", "type": "VARCHAR", "role": "dimension", "semantic_type": "cig_code"},
+                        {
+                            "name": "cig",
+                            "type": "VARCHAR",
+                            "role": "dimension",
+                            "semantic_type": "cig_code",
+                        },
                     ],
                 },
             ]

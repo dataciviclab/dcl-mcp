@@ -65,9 +65,7 @@ async def _check() -> dict[str, Any]:
         if fallback.is_file():
             env["DCL_MCP_ENV_FILE"] = str(fallback)
 
-    params = StdioServerParameters(
-        command=sys.executable, args=["-m", "dcl_mcp.server"], env=env
-    )
+    params = StdioServerParameters(command=sys.executable, args=["-m", "dcl_mcp.server"], env=env)
     report: dict[str, Any] = {}
 
     async with stdio_client(params) as (read, write):
@@ -122,7 +120,6 @@ async def _check() -> dict[str, Any]:
             # 5. Registry compatto: il dettaglio per dataset non viaggia più di
             #    default (era ~186 KB).
             registry = await _call(session, "workspace_triage", {"section": "registry"})
-            assert registry["content"]["detail"] is False
             repos = registry["content"]["registry_summary"]
             assert repos and "signals_detail" not in repos[0]
             report["registry_kb"] = len(json.dumps(registry)) // 1024
@@ -147,9 +144,7 @@ async def _check() -> dict[str, Any]:
             assert bad_view["valid_views"] == ["tree", "datasets"]
 
             # 8. Guardrail SQL: DML rifiutato.
-            dml = await _call(
-                session, "gcs_query", {"slug": slug, "sql": "DELETE FROM _data"}
-            )
+            dml = await _call(session, "gcs_query", {"slug": slug, "sql": "DELETE FROM _data"})
             assert dml["ok"] is False and "SELECT" in dml["error"]
 
     return report
@@ -170,9 +165,7 @@ async def _check_mart() -> dict[str, Any]:
         if fallback.is_file():
             env["DCL_MCP_ENV_FILE"] = str(fallback)
 
-    params = StdioServerParameters(
-        command=sys.executable, args=["-m", "dcl_mcp.server"], env=env
-    )
+    params = StdioServerParameters(command=sys.executable, args=["-m", "dcl_mcp.server"], env=env)
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()

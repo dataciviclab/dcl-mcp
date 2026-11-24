@@ -15,7 +15,7 @@ from typing import Any
 
 from dcl_mcp import telemetry
 from dcl_mcp.app import mcp
-from dcl_mcp.context.fetch import load_topic_index, load_triage
+from dcl_mcp.context.fetch import load_topic_index
 from dcl_mcp.gcs.resolver import GcsResolveError, resolve, validate_sql
 from dcl_mcp.guards import guard_ok
 from dcl_mcp.provenance import catalog_meta, signal_index, snapshot_year
@@ -95,9 +95,7 @@ def _run_query(read_paths: list[str], sql: str, limit: int) -> tuple[list[str], 
     qui resta solo il binding su DuckDB.
     """
     path_list = ", ".join(f"'{p}'" for p in read_paths)
-    create_view = (
-        f"CREATE OR REPLACE TEMP VIEW _data AS SELECT * FROM read_parquet([{path_list}])"
-    )
+    create_view = f"CREATE OR REPLACE TEMP VIEW _data AS SELECT * FROM read_parquet([{path_list}])"
     final = f"SELECT * FROM ({sql}) AS _inner LIMIT {limit}"
 
     with _CONN_LOCK:
@@ -163,8 +161,7 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
                 # Errore di binding/execution DuckDB: dillo come errore della
                 # query, non come guasto del tool.
                 raise GcsResolveError(
-                    f"Query fallita: {exc}. Controlla le colonne con "
-                    "SELECT * FROM _data LIMIT 1."
+                    f"Query fallita: {exc}. Controlla le colonne con SELECT * FROM _data LIMIT 1."
                 ) from exc
             truncated = len(rows) > safe_limit
             rows = rows[:safe_limit]
@@ -187,7 +184,9 @@ def gcs_query(slug: str, sql: str, layer: str = "clean", limit: int = 100) -> di
             if requested > _MAX_LIMIT:
                 payload["limit_clamped"] = f"{requested} → {_MAX_LIMIT} (max consentito)"
             # Aggiornamento della pipeline per il dataset dietro lo slug.
-            signal = signal_index(load_triage()).get(resolved.get("dataset") or resolved["slug"])
+            signal = signal_index(load_topic_index()).get(
+                resolved.get("dataset") or resolved["slug"]
+            )
             if signal:
                 payload.update(signal)
             telemetry.record(

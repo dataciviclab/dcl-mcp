@@ -32,7 +32,9 @@ def _clear_registry_cache():
 
 def test_single_file_becomes_https():
     paths = to_read_paths("gs://dataciviclab-clean/rifiuti/x/2024/x_clean.parquet")
-    assert paths == ["https://storage.googleapis.com/dataciviclab-clean/rifiuti/x/2024/x_clean.parquet"]
+    assert paths == [
+        "https://storage.googleapis.com/dataciviclab-clean/rifiuti/x/2024/x_clean.parquet"
+    ]
 
 
 def test_glob_stays_gs_for_httpfs():
@@ -124,9 +126,7 @@ def mart_index(sample_index):
 
 
 def test_resolve_mart_exact_slug(monkeypatch, mart_index):
-    monkeypatch.setattr(
-        resolver, "load_registry_github", lambda repo: _fake_registry(_MARTS)
-    )
+    monkeypatch.setattr(resolver, "load_registry_github", lambda repo: _fake_registry(_MARTS))
     resolved = resolve_mart(mart_index, "anzianita__anzianita_comparti")
     assert resolved["layer"] == "mart"
     assert resolved["table"] == "anzianita_comparti"
@@ -134,9 +134,7 @@ def test_resolve_mart_exact_slug(monkeypatch, mart_index):
 
 
 def test_resolve_mart_dataset_slug_ambiguous(monkeypatch, mart_index):
-    monkeypatch.setattr(
-        resolver, "load_registry_github", lambda repo: _fake_registry(_MARTS)
-    )
+    monkeypatch.setattr(resolver, "load_registry_github", lambda repo: _fake_registry(_MARTS))
     with pytest.raises(GcsResolveError, match="dataset__table"):
         resolve_mart(mart_index, "anzianita")
 
@@ -238,10 +236,13 @@ def test_validate_sql_accepts_schema_qualified_data():
 
 def test_validate_sql_quoted_column_not_false_positive():
     """Colonne legittime con nome keyword: "export" nel mart eurostat (audit giro 4)."""
-    assert validate_sql('SELECT "export" FROM _data LIMIT 5') == 'SELECT "export" FROM _data LIMIT 5'
-    assert validate_sql(
-        'SELECT anno, "export", count(*) FROM _data GROUP BY 1, 2'
-    ) == 'SELECT anno, "export", count(*) FROM _data GROUP BY 1, 2'
+    assert (
+        validate_sql('SELECT "export" FROM _data LIMIT 5') == 'SELECT "export" FROM _data LIMIT 5'
+    )
+    assert (
+        validate_sql('SELECT anno, "export", count(*) FROM _data GROUP BY 1, 2')
+        == 'SELECT anno, "export", count(*) FROM _data GROUP BY 1, 2'
+    )
     # Le stringhe letterali non devono triggerare la guardia
     assert validate_sql("SELECT * FROM _data WHERE x = 'copy'") == (
         "SELECT * FROM _data WHERE x = 'copy'"
@@ -315,49 +316,11 @@ def test_validate_sql_allows_cte_chain_and_unnest():
     )
 
 
-# ── mart_card_detail ──────────────────────────────────────────────────────────
-
-
-def _fake_registry_with_columns():
-    col = lambda n, t, r: SimpleNamespace(name=n, type=t, role=r)  # noqa: E731
-    return SimpleNamespace(
-        marts=[
-            SimpleNamespace(
-                slug="ds__mart_wide",
-                table="mart_wide",
-                name="Wide",
-                primary_key=["year", "country"],
-                columns=[col("year", "INTEGER", "dimension"), col("export", "DOUBLE", "metric")],
-                location=SimpleNamespace(path="gs://dataciviclab-mart/x/mart_wide.parquet"),
-            )
-        ]
-    )
-
-
-def test_mart_card_detail(monkeypatch):
-    monkeypatch.setattr(resolver, "load_registry_github", lambda repo: _fake_registry_with_columns())
-    detail = resolver.mart_card_detail("some-repo", "ds__mart_wide")
-    assert detail["table"] == "mart_wide"
-    assert [c["name"] for c in detail["columns"]] == ["year", "export"]
-    assert detail["primary_key"] == ["year", "country"]
-
-
-def test_mart_card_detail_unreachable(monkeypatch):
-    def boom(repo):
-        raise RuntimeError("no network")
-
-    monkeypatch.setattr(resolver, "load_registry_github", boom)
-    assert resolver.mart_card_detail("some-repo", "ds__mart_wide") is None
-    assert resolver.mart_card_detail("some-repo", "missing__mart") is None
-
-
 def test_describe_parquet_columns_local(tmp_path):
     import duckdb
 
     parquet = tmp_path / "m.parquet"
-    duckdb.execute(
-        f"COPY (SELECT 1 AS year, 2.5 AS \"export\") TO '{parquet}' (FORMAT PARQUET)"
-    )
+    duckdb.execute(f"COPY (SELECT 1 AS year, 2.5 AS \"export\") TO '{parquet}' (FORMAT PARQUET)")
     cols = resolver.describe_parquet_columns([str(parquet)])
     assert [c["name"] for c in cols] == ["year", "export"]
     assert resolver.describe_parquet_columns([]) is None
@@ -471,9 +434,7 @@ def test_gcs_query_limit_and_truncation(monkeypatch, tmp_path, sample_index):
     import dcl_mcp.gcs.tools as gcs_tools
 
     parquet = tmp_path / "big.parquet"
-    duckdb.execute(
-        f"COPY (SELECT i AS n FROM range(20) t(i)) TO '{parquet}' (FORMAT PARQUET)"
-    )
+    duckdb.execute(f"COPY (SELECT i AS n FROM range(20) t(i)) TO '{parquet}' (FORMAT PARQUET)")
     fake_resolved = {
         "slug": "demo_ds",
         "layer": "clean",
@@ -501,9 +462,7 @@ def test_gcs_query_exact_limit_not_truncated(monkeypatch, tmp_path, sample_index
     import dcl_mcp.gcs.tools as gcs_tools
 
     parquet = tmp_path / "two.parquet"
-    duckdb.execute(
-        f"COPY (SELECT 1 AS n UNION ALL SELECT 2) TO '{parquet}' (FORMAT PARQUET)"
-    )
+    duckdb.execute(f"COPY (SELECT 1 AS n UNION ALL SELECT 2) TO '{parquet}' (FORMAT PARQUET)")
     fake_resolved = {
         "slug": "demo_ds",
         "layer": "clean",
