@@ -70,17 +70,51 @@ def dataset_snapshot(entry: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def signal_index(triage: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Indice slug → aggiornamento reale, da `workspace_triage.registry_summary`.
+def signal_index(topic_index: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Indice slug → aggiornamento reale, da `topic_index.datasets[]`.
 
-    `registry_summary[]` porta, per repo, `updated_at` e `signals_detail[]` con
-    `run` (run_id, year, started_at): è l'ultima esecuzione della pipeline per
-    dataset. Fino a oggi era raggiungibile solo con
-    `workspace_triage(section="registry")` (191 KB) e mai agganciata ai
-    dataset: l'agente doveva ricostruire la mappa a mano (audit R02: 2.556
-    `explore` per una domanda che questi dati permettono di rispondere in una
-    chiamata).
+    Fonte unica: il registry v2 espone per dataset `last_run`
+    (``{at, year, status}``, l'esecuzione più recente su tutte le partizioni).
+    ACB li riporta nel topic_index (schema v8), quindi non serve più
+    `workspace_triage.registry_summary.signals_detail` (~190 KB che duplicava
+    gli stessi fatti).
+
+    Compat: finché il branch `context` pubblica topic_index v7 (senza
+    `last_run`) si ricade su `signals_detail`. Rimuovere `_legacy_index`
+    quando `schema_version` del topic_index live è >= 8.
     """
+    if topic_index and topic_index.get("schema_version", 0) < 8:
+        return _legacy_index()
+
+    out: dict[str, dict[str, Any]] = {}
+    datasets = (topic_index or {}).get("datasets") or {}
+    repos = (topic_index or {}).get("repos") or {}
+    if not isinstance(datasets, dict):
+        return out
+    for entries in datasets.values():
+        for ds in entries or []:
+            if not isinstance(ds, dict):
+                continue
+            slug = str(ds.get("slug") or "")
+            if not slug:
+                continue
+            run = ds.get("last_run") or {}
+            repo = ds.get("registry_source") or ""
+            repo_updated = (repos.get(repo) or {}).get("updated_at") if repo else None
+            out[slug] = {
+                "last_run": run.get("at"),
+                "run_year": run.get("year"),
+                "run_status": run.get("status"),
+                "repo_updated_at": repo_updated,
+            }
+    return out
+
+
+def _legacy_index() -> dict[str, dict[str, Any]]:
+    """Transizione: freschezza da `workspace_triage.registry_summary` (ACB < v8)."""
+    from dcl_mcp.context.fetch import load_triage
+
+    triage = load_triage()
     out: dict[str, dict[str, Any]] = {}
     for repo in (triage or {}).get("registry_summary") or []:
         if not isinstance(repo, dict):
@@ -90,9 +124,7 @@ def signal_index(triage: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
             if not isinstance(signal, dict):
                 continue
             # `label` è lo slug del dataset; `id` può essere prefissato per
-            # famiglia (es. `compose:anac_cross`). Con `id` prima, i 42
-            # dataset compose restavano senza freschezza — proprio quelli la
-            # cui freschezza dipende da altri dataset.
+            # famiglia (es. `compose:anac_cross`).
             slug = signal.get("label") or signal.get("id")
             if not slug:
                 continue

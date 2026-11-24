@@ -99,35 +99,6 @@ def _load_registry_cached(repo: str) -> Any:
     return reg
 
 
-def mart_card_detail(repo: str, mart_slug: str) -> dict[str, Any] | None:
-    """Schema di un mart dal registry del producer (best-effort, futuro).
-
-    Oggi i produttori NON committano le colonne dei mart nel registry
-    (solo slug/dataset/table/location) — questo path è future-proofing.
-    La via reale è ``describe_parquet_columns`` sul parquet pubblicato.
-    """
-    try:
-        reg = _load_registry_cached(repo)
-    except Exception:
-        return None
-    match = next((m for m in (reg.marts or []) if m.slug == mart_slug), None)
-    if match is None:
-        return None
-    columns = [
-        {"name": c.name, "type": c.type, "role": c.role}
-        for c in (match.columns or [])
-        if getattr(c, "name", None)
-    ]
-    detail: dict[str, Any] = {"table": match.table}
-    if match.name:
-        detail["name"] = match.name
-    if columns:
-        detail["columns"] = columns
-    if match.primary_key:
-        detail["primary_key"] = match.primary_key
-    return detail
-
-
 def describe_parquet_columns(read_paths: list[str]) -> list[dict[str, Any]] | None:
     """Schema reale di un parquet via DuckDB DESCRIBE (footer-only).
 
@@ -206,7 +177,7 @@ def resolve_mart(topic_index: dict[str, Any], slug: str) -> dict[str, Any]:
     return {
         "slug": mart.slug,
         "layer": "mart",
-        "name": mart.name or mart.slug,
+        "name": mart.slug,
         "dataset": mart.dataset,
         "table": mart.table,
         "registry_source": repo,
@@ -215,9 +186,7 @@ def resolve_mart(topic_index: dict[str, Any], slug: str) -> dict[str, Any]:
     }
 
 
-def resolve(
-    topic_index: dict[str, Any], slug: str, layer: str = "clean"
-) -> dict[str, Any]:
+def resolve(topic_index: dict[str, Any], slug: str, layer: str = "clean") -> dict[str, Any]:
     """Dispatch per layer: ``clean`` (topic_index) o ``mart`` (registry)."""
     layer_l = (layer or "clean").strip().lower()
     if layer_l == "clean":
@@ -322,8 +291,7 @@ def validate_sql(sql: str) -> str:
     statement = (statements[0] or {}).get("node") or {}
     if statement.get("type") != "SELECT_NODE":
         raise GcsResolveError(
-            f"Ammesse solo query SELECT (o WITH…SELECT), non {statement.get('type')}. "
-            + _SQL_RULES
+            f"Ammesse solo query SELECT (o WITH…SELECT), non {statement.get('type')}. " + _SQL_RULES
         )
 
     scan: dict[str, Any] = {"tables": [], "table_functions": [], "functions": [], "ctes": set()}

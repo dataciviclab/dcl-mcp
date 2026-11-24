@@ -10,7 +10,7 @@ import pytest
 # Indice sintetico v7 — costruito a mano (i build_* restano in ACB):
 # copre dataset con/ senza tags, colonne, due domain, repo infra, analisi.
 SAMPLE_INDEX: dict[str, Any] = {
-    "schema_version": 7,
+    "schema_version": 8,
     "repos": {
         "rifiuti-urbani": {
             "description": "Rifiuti urbani ISPRA",
@@ -54,13 +54,15 @@ SAMPLE_INDEX: dict[str, Any] = {
             {
                 "slug": "ispra_ru_base",
                 "name": "Rifiuti Urbani",
-                "stage": "published",
+                "published": True,
                 "source_id": "ispra",
                 "registry_source": "rifiuti-urbani",
                 "category": "ambiente",
                 "tags": ["rifiuti", "ispra"],
                 "description": "Rifiuti urbani per comune",
                 "period": {"start": 2010, "end": 2024},
+                "partitions": {"2023": 60000, "2024": 63456},
+                "last_run": {"at": "2024-11-06T22:12:55Z", "year": 2024, "status": "SUCCESS"},
                 "clean_rows": 123456,
                 "mart_refs": ["ispra_ru_base__mart_comuni"],
                 "location": {
@@ -74,7 +76,7 @@ SAMPLE_INDEX: dict[str, Any] = {
             {
                 "slug": "bdap_entrate_stato",
                 "name": "Entrate Stato",
-                "stage": "incubating",
+                "published": False,
                 "source_id": "bdap",
                 "registry_source": "open-conto-annuale",
                 "category": "finanza-pubblica",
@@ -87,7 +89,7 @@ SAMPLE_INDEX: dict[str, Any] = {
             {
                 "slug": "anac_bandi_gara",
                 "name": "Anac Bandi Gara",
-                "stage": "published",
+                "published": True,
                 "source_id": "anac",
                 "registry_source": "appalti-pubblici",
                 "category": "appalti",
@@ -136,8 +138,16 @@ SAMPLE_INDEX: dict[str, Any] = {
         },
     ],
     "explorer_themes": [
-        {"slug": "territorio-ambiente", "name": "Territorio e ambiente", "datasets": ["ispra_ru_base"]},
-        {"slug": "finanza-pubblica", "name": "Finanza pubblica", "datasets": ["bdap_entrate_stato"]},
+        {
+            "slug": "territorio-ambiente",
+            "name": "Territorio e ambiente",
+            "datasets": ["ispra_ru_base"],
+        },
+        {
+            "slug": "finanza-pubblica",
+            "name": "Finanza pubblica",
+            "datasets": ["bdap_entrate_stato"],
+        },
     ],
     "analyses": [
         {
