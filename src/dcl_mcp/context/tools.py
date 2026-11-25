@@ -413,7 +413,7 @@ def explore(ref: str) -> dict[str, object]:
             # La card è del mart: via i campi che descrivono il clean parent
             # (righe dello snapshot, lista dei mart fratelli) — restavano
             # accanto a quelli del mart e si contraddicevano.
-            for stale in ("clean_rows", "clean_rows_note", "marts"):
+            for stale in ("clean_rows", "clean_rows_note", "clean_rows_scope", "marts"):
                 content.pop(stale, None)
             if resolved is not None:
                 # Un solo nome per il path (`gcs_path`, come la card dataset)

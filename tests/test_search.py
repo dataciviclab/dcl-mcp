@@ -136,6 +136,19 @@ def test_lab_map_summary_domain_filter(sample_index):
 # ── explore_ref ───────────────────────────────────────────────────────────────
 
 
+def test_explore_clean_rows_note_v1_fallback(sample_index):
+    """Entry senza `partitions` (v7/v1): resta il disclaimer sullo snapshot."""
+    import copy
+
+    index = copy.deepcopy(sample_index)
+    for entries in index["datasets"].values():
+        for ds in entries:
+            ds.pop("partitions", None)
+    card = explore_ref(index, "ispra_ru_base")
+    assert card["clean_rows_scope"] == "single_file"
+    assert "serie completa" in card["clean_rows_note"]
+
+
 def test_explore_dataset_repo_domain(sample_index):
     ds = explore_ref(sample_index, "ispra_ru_base")
     assert ds["found"] is True
@@ -147,7 +160,9 @@ def test_explore_dataset_repo_domain(sample_index):
     assert ds["description"] == "Rifiuti urbani per comune"
     assert ds["year_min"] == 2010 and ds["year_max"] == 2024
     assert ds["clean_rows"] == 123456
-    assert "serie completa" in ds["clean_rows_note"]
+    # v8: clean_rows = somma delle partizioni dichiarate
+    assert ds["clean_rows_scope"] == "sum_of_partitions"
+    assert "partizioni" in ds["clean_rows_note"]
     # Un solo hint (clean): la lista dei mart resta dato, l'hint per il
     # mart lo dà explore(<mart_slug>) col layer giusto.
     assert ds["marts"] == ["ispra_ru_base__mart_comuni"]

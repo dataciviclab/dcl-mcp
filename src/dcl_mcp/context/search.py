@@ -980,19 +980,30 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         # clean pubblicato) — esposto col nome onesto, con disclaimer:
         # non è garantito sia la serie completa (audit: 7762 vs 114k di
         # #443). Per numeri citabili usare count(*) via gcs_query.
-        if full.get("clean_rows"):
+        # 0 è un valore legittimo (dataset vuoto): non va confuso con l'assenza.
+        if full.get("clean_rows") is not None:
             card["clean_rows"] = full["clean_rows"]
-            # Cosa significa il numero: su un glob è l'ultimo file annuale,
-            # non la serie. Il nome del campo da solo lo faceva sembrare un
-            # totale (audit F10: fino a 12× di scarto).
-            card["clean_rows_scope"] = (
-                "last_year_of_multi_file" if card.get("multi_file") else "single_file"
-            )
-            card["clean_rows_note"] = (
-                "Righe dell'ultimo snapshot clean pubblicato dal producer. "
-                "Non è garantito sia la serie completa — per un numero "
-                "verificabile usa il query_hint (count)."
-            )
+            # Cosa significa il numero. Con topic_index v8 `clean_rows` è la
+            # somma delle partizioni dichiarate (`partitions`): è il totale
+            # pubblicato, non un singolo file. Con v7 era l'ultimo snapshot
+            # (su un glob, l'ultimo anno: fino a 12× di scarto, audit F10).
+            partitions = full.get("partitions") or {}
+            if partitions:
+                card["clean_rows_scope"] = "sum_of_partitions"
+                card["clean_rows_note"] = (
+                    f"Somma delle righe clean delle {len(partitions)} partizioni "
+                    "pubblicate nel registry (campo `partitions`). Per un numero "
+                    "verificabile usa il query_hint (count)."
+                )
+            else:
+                card["clean_rows_scope"] = (
+                    "last_year_of_multi_file" if card.get("multi_file") else "single_file"
+                )
+                card["clean_rows_note"] = (
+                    "Righe dell'ultimo snapshot clean pubblicato dal producer "
+                    "(registry senza `partitions`): non è garantito sia la serie "
+                    "completa — per un numero verificabile usa il query_hint (count)."
+                )
         marts = full.get("mart_refs") or []
         if marts:
             # Solo la lista: l'hint lo dà `explore(<mart>)`, con il layer
