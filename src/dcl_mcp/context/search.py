@@ -980,7 +980,8 @@ def explore_ref(topic_index: dict[str, Any], ref: str) -> dict[str, Any]:
         # clean pubblicato) — esposto col nome onesto, con disclaimer:
         # non è garantito sia la serie completa (audit: 7762 vs 114k di
         # #443). Per numeri citabili usare count(*) via gcs_query.
-        if full.get("clean_rows"):
+        # 0 è un valore legittimo (dataset vuoto): non va confuso con l'assenza.
+        if full.get("clean_rows") is not None:
             card["clean_rows"] = full["clean_rows"]
             # Cosa significa il numero. Con topic_index v8 `clean_rows` è la
             # somma delle partizioni dichiarate (`partitions`): è il totale
