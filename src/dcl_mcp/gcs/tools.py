@@ -55,11 +55,16 @@ def _persistent_conn() -> Any:
     global _CONN
     if _CONN is None:
         import duckdb
-        from lab_connectors.duckdb.core import GCS_S3_CONFIG
+        from lab_connectors.duckdb.core import GCS_S3_CONFIG, client_name
 
         con = duckdb.connect(
             ":memory:",
-            config={"memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB")},
+            config={
+                "memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB"),
+                # Identità nei usage log GCS: `custom_user_agent` si può
+                # impostare solo qui, non con SET dopo l'apertura.
+                "custom_user_agent": client_name(),
+            },
         )
         con.execute("PRAGMA disable_progress_bar")
         con.execute("INSTALL httpfs")
