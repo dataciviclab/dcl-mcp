@@ -13,7 +13,14 @@ from pathlib import Path
 from lab_connectors.http import HttpClient
 from lab_connectors.mcp import create_mcp_server
 
+from dcl_mcp import __version__
+
 SERVER_NAME = "dataciviclab"
+
+# Identità del client nei usage log GCS (vedi `client_name` in lab-connectors):
+# senza, le query dell'MCP risultano `duckdb/vX python/3.12` e non si
+# distinguono da build, dashboard o script. Deve precedere ogni connessione.
+os.environ.setdefault("DCL_CLIENT_NAME", f"dcl-mcp/{__version__}")
 # Organizzazione GitHub del Lab: hub delle Discussions e perimetro della
 # ricerca org-wide di `find(include_github=True)`.
 DCL_ORG = "dataciviclab"
