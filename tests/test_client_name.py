@@ -28,13 +28,35 @@ def test_app_imposta_client_name(monkeypatch: pytest.MonkeyPatch) -> None:
         os.environ.pop("DCL_CLIENT_NAME", None)
 
 
-@pytest.mark.parametrize("bad", ["", "   ", "con spazi", "quote'inside", "a;drop", "x" * 200])
-def test_env_non_conforme_cade_sul_default(
-    monkeypatch: pytest.MonkeyPatch, bad: str
-) -> None:
-    """Un env malevolo non deve finire nell'header né rompere la connessione."""
-    from dcl_mcp.gcs.tools import _client_name
+def test_conn_persistente_usa_client_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """La UA deve finire nella config di `duckdb.connect`, non solo nell'env.
 
-    monkeypatch.setenv("DCL_CLIENT_NAME", bad)
+    Regressione storica: impostare il valore e non passarlo alla connessione
+    (DuckDB non accetta `SET custom_user_agent` dopo l'apertura).
+    """
+    import duckdb
 
-    assert _client_name() == "dcl-unknown/0"
+    from dcl_mcp.gcs import tools
+
+    catturato: dict[str, object] = {}
+
+    class _FakeCon:
+        def execute(self, *a: object, **k: object) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    def fake_connect(*a: object, **kw: object) -> _FakeCon:
+        catturato.update(kw.get("config") or {})
+        return _FakeCon()
+
+    monkeypatch.setenv("DCL_CLIENT_NAME", "dcl-mcp-test/9.9")
+    monkeypatch.setattr(duckdb, "connect", fake_connect)
+    tools.reset_connection()
+    try:
+        tools._persistent_conn()
+    finally:
+        tools.reset_connection()
+
+    assert catturato.get("custom_user_agent") == "dcl-mcp-test/9.9"

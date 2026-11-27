@@ -10,7 +10,6 @@ senza clonare il multi-repo.
 from __future__ import annotations
 
 import os
-import re
 import threading
 from typing import Any
 
@@ -31,24 +30,6 @@ _DEFAULT_LIMIT = 100
 # ripagava 27 listing.
 _CONN_LOCK = threading.Lock()
 _CONN: Any = None
-
-
-_CLIENT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$")
-
-
-def _client_name() -> str:
-    """Identità del client nei usage log GCS (env `DCL_CLIENT_NAME`).
-
-    Locale di proposito: `lab_connectors.duckdb.core.client_name` arriva con
-    dataciviclab/lab-connectors#106, e questo repo non deve dipendere da
-    un'API non ancora mergiata. Quando #106 sarà in main, questa funzione
-    diventa un alias dell'helper condiviso.
-
-    La validazione replica #106: un env con spazi, virgolette o `;` non deve
-    rompere la connessione (header non valido) né finire nell'header.
-    """
-    raw = (os.environ.get("DCL_CLIENT_NAME") or "").strip()
-    return raw if _CLIENT_NAME_RE.match(raw) else "dcl-unknown/0"
 
 
 def _apply_env(con: Any) -> None:
@@ -74,7 +55,7 @@ def _persistent_conn() -> Any:
     global _CONN
     if _CONN is None:
         import duckdb
-        from lab_connectors.duckdb.core import GCS_S3_CONFIG
+        from lab_connectors.duckdb.core import GCS_S3_CONFIG, client_name
 
         con = duckdb.connect(
             ":memory:",
@@ -82,7 +63,7 @@ def _persistent_conn() -> Any:
                 "memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB"),
                 # Identità nei usage log GCS: `custom_user_agent` si può
                 # impostare solo qui, non con SET dopo l'apertura.
-                "custom_user_agent": _client_name(),
+                "custom_user_agent": client_name(),
             },
         )
         con.execute("PRAGMA disable_progress_bar")
